@@ -12,26 +12,29 @@ import (
 	"github.com/kalvis/mesh/internal/model"
 )
 
+// TokenProvider returns a valid GitHub token, minting a new one if needed.
+type TokenProvider func() (string, error)
+
 // GitHubClient communicates with the GitHub Issues REST API.
 type GitHubClient struct {
-	Owner      string
-	Repo       string
-	Token      string
-	Label      string
-	TimeoutMs  int
-	PageSize   int
-	httpClient *http.Client
-	baseURL    string // for testing; defaults to "https://api.github.com"
+	Owner         string
+	Repo          string
+	Label         string
+	TimeoutMs     int
+	PageSize      int
+	tokenProvider TokenProvider
+	httpClient    *http.Client
+	baseURL       string // for testing; defaults to "https://api.github.com"
 }
 
-// NewGitHubClient creates a GitHub Issues client with Bearer token auth.
-func NewGitHubClient(owner, repo, token string, timeoutMs int) *GitHubClient {
+// NewGitHubClient creates a GitHub Issues client with a token provider.
+func NewGitHubClient(owner, repo string, tokenProvider TokenProvider, timeoutMs int) *GitHubClient {
 	return &GitHubClient{
-		Owner:     owner,
-		Repo:      repo,
-		Token:     token,
-		PageSize:  100,
-		TimeoutMs: timeoutMs,
+		Owner:         owner,
+		Repo:          repo,
+		tokenProvider: tokenProvider,
+		PageSize:      100,
+		TimeoutMs:     timeoutMs,
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
 		},
@@ -161,12 +164,17 @@ func (c *GitHubClient) fetchIssues(state, label string) ([]model.Issue, error) {
 }
 
 func (c *GitHubClient) doGet(reqURL string) ([]byte, error) {
+	token, err := c.tokenProvider()
+	if err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubAPIAuth, "failed to get token", err)
+	}
+
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, model.NewMeshError(model.ErrGitHubAPIRequest, "failed to create request", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
 	resp, err := c.httpClient.Do(req)

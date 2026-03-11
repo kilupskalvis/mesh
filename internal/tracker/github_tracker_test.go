@@ -11,9 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func staticToken(token string) TokenProvider {
+	return func() (string, error) { return token, nil }
+}
+
 func newTestGitHubClient(t *testing.T, serverURL string) *GitHubClient {
 	t.Helper()
-	c := NewGitHubClient("testowner", "testrepo", "test-token", 5000)
+	c := NewGitHubClient("testowner", "testrepo", staticToken("test-token"), 5000)
 	c.baseURL = serverURL
 	return c
 }
@@ -65,7 +69,7 @@ func TestGitHubClient_FetchCandidateIssues(t *testing.T) {
 func TestGitHubClient_FetchCandidateIssues_NoOpenState(t *testing.T) {
 	t.Parallel()
 
-	c := NewGitHubClient("o", "r", "t", 5000)
+	c := NewGitHubClient("o", "r", staticToken("t"), 5000)
 	issues, err := c.FetchCandidateIssues([]string{"closed"})
 	require.NoError(t, err)
 	assert.Nil(t, issues)

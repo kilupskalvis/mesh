@@ -17,11 +17,14 @@ type ServiceConfig struct {
 	TrackerEmail      string
 	TrackerAPIToken   string
 	TrackerProjectKey string
-	TrackerOwner      string
-	TrackerRepo       string
-	TrackerLabel      string
-	ActiveStates      []string
-	TerminalStates    []string
+	TrackerOwner          string
+	TrackerRepo           string
+	TrackerLabel          string
+	GitHubAppID           string
+	GitHubAppPrivateKey   string // path to .pem file
+	GitHubInstallationID  string
+	ActiveStates          []string
+	TerminalStates        []string
 
 	// Polling
 	PollIntervalMs int
@@ -61,10 +64,7 @@ type ServiceConfig struct {
 	SentryDSN string
 
 	// Proxy (credential isolation)
-	ProxyListenPort         int
-	GitHubAppID             string
-	GitHubAppPrivateKeyPath string
-	GitHubInstallationID    string
+	ProxyListenPort int
 
 	// Server (optional HTTP extension)
 	ServerPort int
@@ -133,16 +133,35 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 		}
 		cfg.TrackerLabel = getNestedString(raw, "tracker", "label")
 
-		rawToken := getNestedString(raw, "tracker", "api_token")
-		if rawToken == "" {
-			rawToken = "$GITHUB_TOKEN"
+		rawAppID := getNestedString(raw, "tracker", "app_id")
+		if rawAppID == "" {
+			return nil, model.NewMeshError(model.ErrMissingTrackerAPIToken,
+				"tracker.app_id is required for github", nil)
 		}
-		token, ok := resolveEnvVar(rawToken)
+		appID, ok := resolveEnvVar(rawAppID)
 		if !ok {
 			return nil, model.NewMeshError(model.ErrMissingTrackerAPIToken,
-				"tracker.api_token is missing or empty after resolution (set $GITHUB_TOKEN)", nil)
+				"tracker.app_id is empty after resolution", nil)
 		}
-		cfg.TrackerAPIToken = token
+		cfg.GitHubAppID = appID
+
+		rawInstID := getNestedString(raw, "tracker", "installation_id")
+		if rawInstID == "" {
+			return nil, model.NewMeshError(model.ErrMissingTrackerAPIToken,
+				"tracker.installation_id is required for github", nil)
+		}
+		instID, ok := resolveEnvVar(rawInstID)
+		if !ok {
+			return nil, model.NewMeshError(model.ErrMissingTrackerAPIToken,
+				"tracker.installation_id is empty after resolution", nil)
+		}
+		cfg.GitHubInstallationID = instID
+		rawKeyPath := getNestedString(raw, "tracker", "private_key_path")
+		if rawKeyPath == "" {
+			return nil, model.NewMeshError(model.ErrMissingTrackerAPIToken,
+				"tracker.private_key_path is required for github", nil)
+		}
+		cfg.GitHubAppPrivateKey = expandHome(rawKeyPath)
 	}
 
 	// State lists — defaults depend on tracker kind
@@ -284,14 +303,6 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 
 	// Proxy (credential isolation)
 	cfg.ProxyListenPort = getNestedInt(raw, 9480, "proxy", "listen_port")
-
-	// GitHub App (for short-lived tokens)
-	cfg.GitHubAppID = getNestedString(raw, "proxy", "github_app_id")
-	rawKeyPath := getNestedString(raw, "proxy", "github_app_private_key_path")
-	if rawKeyPath != "" {
-		cfg.GitHubAppPrivateKeyPath = expandHome(rawKeyPath)
-	}
-	cfg.GitHubInstallationID = getNestedString(raw, "proxy", "github_installation_id")
 
 	return cfg, nil
 }

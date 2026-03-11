@@ -27,6 +27,7 @@ http {
             proxy_send_timeout 600s;
         }
 
+        {{if .JiraEndpoint}}
         # Jira API proxy — injects Basic auth header
         location /jira/ {
             proxy_pass {{.JiraEndpoint}}/;
@@ -36,6 +37,7 @@ http {
             proxy_ssl_server_name on;
             proxy_buffering off;
         }
+        {{end}}
         {{if .SentryDSN}}
         # Sentry ingest proxy
         location /sentry/ {

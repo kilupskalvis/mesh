@@ -29,8 +29,14 @@ func ValidateDispatchConfig(cfg *ServiceConfig) error {
 		if cfg.TrackerRepo == "" {
 			return fmt.Errorf("validation failed: tracker.repo is required")
 		}
-		if cfg.TrackerAPIToken == "" {
-			return fmt.Errorf("validation failed: tracker.api_token is missing")
+		if cfg.GitHubAppID == "" {
+			return fmt.Errorf("validation failed: tracker.app_id is required")
+		}
+		if cfg.GitHubInstallationID == "" {
+			return fmt.Errorf("validation failed: tracker.installation_id is required")
+		}
+		if cfg.GitHubAppPrivateKey == "" {
+			return fmt.Errorf("validation failed: tracker.private_key_path is required")
 		}
 	default:
 		return fmt.Errorf("validation failed: unsupported tracker.kind %q", cfg.TrackerKind)

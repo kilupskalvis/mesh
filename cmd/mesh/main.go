@@ -106,8 +106,9 @@ func run(args []string) error {
 	}
 	defer sentryClient.Flush(2 * time.Second)
 
-	// 5. Initialize tracker client
+	// 5. Initialize tracker client and token provider
 	var trackerClient orchestrator.TrackerClient
+	var githubTokenProvider func() (string, error)
 	switch cfg.TrackerKind {
 	case "jira":
 		trackerClient = tracker.NewJiraClient(
@@ -118,10 +119,17 @@ func run(args []string) error {
 			30000,
 		)
 	case "github":
+		keyPEM, err := os.ReadFile(cfg.GitHubAppPrivateKey)
+		if err != nil {
+			return fmt.Errorf("reading GitHub App private key: %w", err)
+		}
+		tokenMgr := tracker.NewGitHubTokenManager(cfg.GitHubAppID, cfg.GitHubInstallationID, keyPEM)
+		githubTokenProvider = tokenMgr.Token
+
 		ghClient := tracker.NewGitHubClient(
 			cfg.TrackerOwner,
 			cfg.TrackerRepo,
-			cfg.TrackerAPIToken,
+			tokenMgr.Token,
 			30000,
 		)
 		if cfg.TrackerLabel != "" {
@@ -165,8 +173,13 @@ func run(args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	orch = orchestrator.New(cfg, wf.PromptTemplate, trackerClient, dockerRunner, ws, logger,
-		orchestrator.WithErrorReporter(sentryClient))
+	orchOpts := []func(*orchestrator.Orchestrator){
+		orchestrator.WithErrorReporter(sentryClient),
+	}
+	if githubTokenProvider != nil {
+		orchOpts = append(orchOpts, orchestrator.WithGitHubTokenProvider(githubTokenProvider))
+	}
+	orch = orchestrator.New(cfg, wf.PromptTemplate, trackerClient, dockerRunner, ws, logger, orchOpts...)
 
 	// Startup terminal workspace cleanup (non-fatal).
 	orch.CleanupTerminalWorkspaces()

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,11 +29,16 @@ func BuildAppJWT(appID string, privateKeyPEM []byte) (string, error) {
 		return "", fmt.Errorf("parsing private key: %w", err)
 	}
 
+	appIDInt, err := strconv.Atoi(appID)
+	if err != nil {
+		return "", fmt.Errorf("app_id must be numeric: %w", err)
+	}
+
 	now := time.Now()
 	claims := map[string]any{
 		"iat": now.Add(-60 * time.Second).Unix(),
 		"exp": now.Add(10 * time.Minute).Unix(),
-		"iss": appID,
+		"iss": appIDInt,
 	}
 
 	// Build JWT manually (header.payload.signature).

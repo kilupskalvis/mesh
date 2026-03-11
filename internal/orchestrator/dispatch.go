@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/kalvis/mesh/internal/logging"
 	"github.com/kalvis/mesh/internal/model"
-	"github.com/kalvis/mesh/internal/proxy"
 	"github.com/kalvis/mesh/internal/runner"
 	"github.com/kalvis/mesh/internal/template"
 	"github.com/kalvis/mesh/internal/workspace"
@@ -94,9 +92,11 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		}
 	}
 
-	// GitHub: mint short-lived token or fall back to env.
-	if ghToken, err := o.mintGitHubToken(); err == nil && ghToken != "" {
-		envVars["GITHUB_TOKEN"] = ghToken
+	// GitHub: mint short-lived installation token for the container.
+	if o.githubTokenProvider != nil {
+		if ghToken, err := o.githubTokenProvider(); err == nil && ghToken != "" {
+			envVars["GITHUB_TOKEN"] = ghToken
+		}
 	}
 
 	attemptVal := 0
@@ -218,26 +218,3 @@ func (o *Orchestrator) monitorWorker(
 	}
 }
 
-// mintGitHubToken returns a short-lived GitHub App installation token.
-// Returns ("", nil) if GitHub App is not configured.
-func (o *Orchestrator) mintGitHubToken() (string, error) {
-	if o.config.GitHubAppID == "" || o.config.GitHubAppPrivateKeyPath == "" {
-		// Not configured — fall back to GITHUB_TOKEN from env.
-		if v := os.Getenv("GITHUB_TOKEN"); v != "" {
-			return v, nil
-		}
-		return "", nil
-	}
-
-	keyPEM, err := os.ReadFile(o.config.GitHubAppPrivateKeyPath)
-	if err != nil {
-		return "", fmt.Errorf("reading GitHub App private key: %w", err)
-	}
-
-	return proxy.MintInstallationToken(
-		"https://api.github.com",
-		o.config.GitHubAppID,
-		o.config.GitHubInstallationID,
-		keyPEM,
-	)
-}

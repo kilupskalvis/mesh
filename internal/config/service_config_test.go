@@ -203,28 +203,23 @@ func TestServiceConfig_ProxyListenPortDefault(t *testing.T) {
 	assert.Equal(t, 9480, cfg.ProxyListenPort)
 }
 
-func TestServiceConfig_ProxyGitHubApp(t *testing.T) {
+func TestServiceConfig_GitHubApp(t *testing.T) {
 	t.Parallel()
 	raw := map[string]any{
 		"tracker": map[string]any{
-			"kind":        "jira",
-			"endpoint":    "https://test.atlassian.net",
-			"email":       "test@test.com",
-			"api_token":   "token",
-			"project_key": "PROJ",
-		},
-		"proxy": map[string]any{
-			"enabled":                    true,
-			"github_app_id":              "123456",
-			"github_app_private_key_path": "/tmp/key.pem",
-			"github_installation_id":     "789",
+			"kind":             "github",
+			"owner":            "kilupskalvis",
+			"repo":             "mesh",
+			"app_id":           "123456",
+			"installation_id":  "789",
+			"private_key_path": "/tmp/key.pem",
 		},
 	}
 
 	cfg, err := NewServiceConfig(raw)
 	require.NoError(t, err)
 	assert.Equal(t, "123456", cfg.GitHubAppID)
-	assert.Equal(t, "/tmp/key.pem", cfg.GitHubAppPrivateKeyPath)
+	assert.Equal(t, "/tmp/key.pem", cfg.GitHubAppPrivateKey)
 	assert.Equal(t, "789", cfg.GitHubInstallationID)
 }
 
@@ -245,13 +240,15 @@ func TestServiceConfig_AgentModelDefault(t *testing.T) {
 }
 
 func TestServiceConfig_GitHub_Defaults(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "ghp_testtoken123")
-
+	t.Parallel()
 	raw := map[string]any{
 		"tracker": map[string]any{
-			"kind":  "github",
-			"owner": "kilupskalvis",
-			"repo":  "mesh",
+			"kind":             "github",
+			"owner":            "kilupskalvis",
+			"repo":             "mesh",
+			"app_id":           "123",
+			"installation_id":  "456",
+			"private_key_path": "/tmp/key.pem",
 		},
 	}
 	cfg, err := NewServiceConfig(raw)
@@ -261,7 +258,6 @@ func TestServiceConfig_GitHub_Defaults(t *testing.T) {
 	assert.Equal(t, "kilupskalvis", cfg.TrackerOwner)
 	assert.Equal(t, "mesh", cfg.TrackerRepo)
 	assert.Equal(t, "", cfg.TrackerLabel)
-	assert.Equal(t, "ghp_testtoken123", cfg.TrackerAPIToken)
 	assert.Equal(t, []string{"open"}, cfg.ActiveStates)
 	assert.Equal(t, []string{"closed"}, cfg.TerminalStates)
 }
@@ -270,27 +266,30 @@ func TestServiceConfig_GitHub_WithLabel(t *testing.T) {
 	t.Parallel()
 	raw := map[string]any{
 		"tracker": map[string]any{
-			"kind":      "github",
-			"owner":     "kilupskalvis",
-			"repo":      "mesh",
-			"api_token": "ghp_explicit",
-			"label":     "mesh",
+			"kind":             "github",
+			"owner":            "kilupskalvis",
+			"repo":             "mesh",
+			"app_id":           "123",
+			"installation_id":  "456",
+			"private_key_path": "/tmp/key.pem",
+			"label":            "mesh",
 		},
 	}
 	cfg, err := NewServiceConfig(raw)
 	require.NoError(t, err)
 
 	assert.Equal(t, "mesh", cfg.TrackerLabel)
-	assert.Equal(t, "ghp_explicit", cfg.TrackerAPIToken)
 }
 
 func TestServiceConfig_GitHub_MissingOwner(t *testing.T) {
 	t.Parallel()
 	raw := map[string]any{
 		"tracker": map[string]any{
-			"kind":      "github",
-			"repo":      "mesh",
-			"api_token": "tok",
+			"kind":             "github",
+			"repo":             "mesh",
+			"app_id":           "123",
+			"installation_id":  "456",
+			"private_key_path": "/tmp/key.pem",
 		},
 	}
 	_, err := NewServiceConfig(raw)
@@ -302,9 +301,11 @@ func TestServiceConfig_GitHub_MissingRepo(t *testing.T) {
 	t.Parallel()
 	raw := map[string]any{
 		"tracker": map[string]any{
-			"kind":      "github",
-			"owner":     "kilupskalvis",
-			"api_token": "tok",
+			"kind":             "github",
+			"owner":            "kilupskalvis",
+			"app_id":           "123",
+			"installation_id":  "456",
+			"private_key_path": "/tmp/key.pem",
 		},
 	}
 	_, err := NewServiceConfig(raw)
@@ -312,17 +313,18 @@ func TestServiceConfig_GitHub_MissingRepo(t *testing.T) {
 	assert.Contains(t, err.Error(), "repo")
 }
 
-func TestServiceConfig_GitHub_MissingToken(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "")
-
+func TestServiceConfig_GitHub_MissingAppID(t *testing.T) {
+	t.Parallel()
 	raw := map[string]any{
 		"tracker": map[string]any{
-			"kind":  "github",
-			"owner": "kilupskalvis",
-			"repo":  "mesh",
+			"kind":             "github",
+			"owner":            "kilupskalvis",
+			"repo":             "mesh",
+			"installation_id":  "456",
+			"private_key_path": "/tmp/key.pem",
 		},
 	}
 	_, err := NewServiceConfig(raw)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing_tracker_api_token")
+	assert.Contains(t, err.Error(), "app_id")
 }

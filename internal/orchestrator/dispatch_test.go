@@ -254,27 +254,31 @@ func TestDispatchIssue_InjectsProxyURLsNotSecrets(t *testing.T) {
 	assert.Equal(t, "custom_value", env["CUSTOM_VAR"])
 }
 
-func TestDispatchIssue_GitHubTokenFallback(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "test-gh-token")
+func TestDispatchIssue_GitHubTokenProvider(t *testing.T) {
+	t.Parallel()
 
-	tracker := &mockTracker{}
+	tr := &mockTracker{}
 	r := newMockRunner()
 	ws := workspace.NewManager(t.TempDir())
 	cfg := testConfig()
+	cfg.TrackerKind = "github"
+	cfg.TrackerOwner = "testowner"
+	cfg.TrackerRepo = "testrepo"
 	cfg.ProxyListenPort = 9480
 
-	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+	tokenProvider := func() (string, error) { return "minted-token", nil }
+	orch := New(cfg, "Work on {{ issue.title }}", tr, r, ws, testLogger(),
+		WithGitHubTokenProvider(tokenProvider))
 
 	ctx := context.Background()
-	err := orch.DispatchIssue(ctx, makeIssue("1", "PROJ-1", "Test", "To Do"), nil)
+	err := orch.DispatchIssue(ctx, makeIssue("1", "PROJ-1", "Test", "open"), nil)
 	require.NoError(t, err)
 
 	r.mu.Lock()
 	env := r.lastParams.EnvVars
 	r.mu.Unlock()
 
-	// GitHub token should be passed through (no GitHub App configured, falls back to env).
-	assert.Equal(t, "test-gh-token", env["GITHUB_TOKEN"])
+	assert.Equal(t, "minted-token", env["GITHUB_TOKEN"])
 }
 
 func TestBackoffMs(t *testing.T) {

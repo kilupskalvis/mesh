@@ -39,13 +39,14 @@ type StateSnapshot struct {
 // single goroutine (the poll loop), so no mutexes are needed.
 type Orchestrator struct {
 	// Dependencies (injected)
-	tracker       TrackerClient
-	runner        runner.Runner
-	workspace     *workspace.Manager
-	config        *config.ServiceConfig
-	promptTmpl    string
-	logger        *slog.Logger
-	errorReporter ErrorReporter
+	tracker            TrackerClient
+	runner             runner.Runner
+	workspace          *workspace.Manager
+	config             *config.ServiceConfig
+	promptTmpl         string
+	logger             *slog.Logger
+	errorReporter      ErrorReporter
+	githubTokenProvider func() (string, error) // optional; set for github tracker kind
 
 	// State
 	running         map[string]*model.RunningEntry // issue_id -> running entry
@@ -112,6 +113,13 @@ func New(cfg *config.ServiceConfig, promptTmpl string, tracker TrackerClient,
 func WithErrorReporter(er ErrorReporter) func(*Orchestrator) {
 	return func(o *Orchestrator) {
 		o.errorReporter = er
+	}
+}
+
+// WithGitHubTokenProvider returns an option that sets the GitHub token provider.
+func WithGitHubTokenProvider(tp func() (string, error)) func(*Orchestrator) {
+	return func(o *Orchestrator) {
+		o.githubTokenProvider = tp
 	}
 }
 
