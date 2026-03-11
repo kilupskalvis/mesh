@@ -1,0 +1,23 @@
+# Build output
+/mesh
+/bin/
+*.exe
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Python
+__pycache__/
+*.egg-info/
+.coverage
+
+# Worktrees
+.worktrees/
+
+# Local mesh config/plans
+.mesh/
