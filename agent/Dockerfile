@@ -16,7 +16,7 @@ RUN curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/permalink/latest/do
 
 # LSP server binaries
 RUN pip install --no-cache-dir pyright
-RUN npm install -g typescript typescript-language-server
+RUN npm install -g typescript typescript-language-server @anthropic-ai/claude-code
 
 # LSP plugin configs from official marketplace (optional, repo layout may change)
 RUN git clone --depth 1 https://github.com/anthropics/claude-plugins-official.git /tmp/plugins \
@@ -28,7 +28,9 @@ RUN git clone --depth 1 https://github.com/anthropics/claude-plugins-official.gi
 WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
+COPY prompts/ prompts/
 RUN pip install --no-cache-dir .
 
-ENV PYTHONUNBUFFERED=1
+RUN useradd -m -s /bin/bash -u 1000 agent
+ENV PYTHONUNBUFFERED=1 HOME=/home/agent
 ENTRYPOINT ["python", "-m", "mesh_agent"]

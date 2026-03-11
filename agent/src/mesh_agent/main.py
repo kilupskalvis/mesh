@@ -47,6 +47,9 @@ def parse_stdin() -> StdinPayload:
         workspace=data["workspace"],
         config=agent_config,
         attempt=data.get("attempt"),
+        system_prompt=data.get("system_prompt", ""),
+        continuation_prompt=data.get("continuation_prompt", ""),
+        terminal_prompt=data.get("terminal_prompt", ""),
     )
 
 

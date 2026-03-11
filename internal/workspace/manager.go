@@ -43,6 +43,10 @@ func (m *Manager) CreateForIssue(identifier string) (string, bool, error) {
 	if err := os.MkdirAll(wsPath, 0o755); err != nil {
 		return "", false, fmt.Errorf("create workspace directory: %w", err)
 	}
+	// Ensure container user can write (MkdirAll respects umask, so chmod explicitly).
+	if err := os.Chmod(wsPath, 0o777); err != nil {
+		return "", false, fmt.Errorf("chmod workspace directory: %w", err)
+	}
 
 	return wsPath, true, nil
 }

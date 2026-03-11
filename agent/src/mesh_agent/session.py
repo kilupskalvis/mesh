@@ -99,8 +99,12 @@ async def run_session(
             if issue_state.is_terminal:
                 gave_terminal_warning = True
                 current_prompt = (
-                    f"Issue {payload.issue.identifier} was moved to "
-                    f"'{issue_state.status}' (terminal). Commit any work in progress."
+                    payload.terminal_prompt or
+                    "Issue {identifier} was moved to '{status}' (terminal). "
+                    "Commit any work in progress."
+                ).format(
+                    identifier=payload.issue.identifier,
+                    status=issue_state.status,
                 )
                 continue  # Exactly one graceful wrap-up phase, then break above
             if issue_state.is_blocked:
@@ -108,9 +112,10 @@ async def run_session(
 
             # CONTINUATION
             current_prompt = (
-                f"Continue working on {payload.issue.identifier}. "
-                f"Review what you've done so far and proceed to the next step."
-            )
+                payload.continuation_prompt or
+                "Continue working on {identifier}. "
+                "Review what you've done so far and proceed to the next step."
+            ).format(identifier=payload.issue.identifier)
 
         emitter.completed(
             turns_used=total_phases,

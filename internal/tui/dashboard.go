@@ -108,13 +108,13 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	} else {
 		// Table header.
-		fmt.Fprintf(&b, "  %-16s %-14s %6s %-16s %12s %10s\n",
+		fmt.Fprintf(&b, "  %-24s %-10s %6s %-20s %12s %10s\n",
 			"Identifier", "State", "Turns", "Last Event", "Tokens", "Duration")
-		fmt.Fprintf(&b, "  %-16s %-14s %6s %-16s %12s %10s\n",
-			strings.Repeat("─", 16),
-			strings.Repeat("─", 14),
+		fmt.Fprintf(&b, "  %-24s %-10s %6s %-20s %12s %10s\n",
+			strings.Repeat("─", 24),
+			strings.Repeat("─", 10),
 			strings.Repeat("─", 6),
-			strings.Repeat("─", 16),
+			strings.Repeat("─", 20),
 			strings.Repeat("─", 12),
 			strings.Repeat("─", 10))
 
@@ -127,11 +127,11 @@ func (m Model) View() string {
 				InputTokens:  entry.AgentInputTokens,
 				OutputTokens: entry.AgentOutputTokens,
 			})
-			fmt.Fprintf(&b, "  %-16s %-14s %6d %-16s %12s %10s\n",
-				truncate(entry.Identifier, 16),
-				truncate(entry.Issue.State, 14),
+			fmt.Fprintf(&b, "  %-24s %-10s %6d %-20s %12s %10s\n",
+				truncate(entry.Identifier, 24),
+				truncate(entry.Issue.State, 10),
 				entry.TurnCount,
-				truncate(eventSummary, 16),
+				truncate(eventSummary, 20),
 				formatTokens(entry.AgentTotalTokens),
 				dur.String())
 		}
@@ -143,10 +143,10 @@ func (m Model) View() string {
 		b.WriteString(sectionStyle.Render("Retry Queue"))
 		b.WriteString("\n")
 
-		fmt.Fprintf(&b, "  %-20s %8s %12s  %s\n",
+		fmt.Fprintf(&b, "  %-24s %8s %12s  %s\n",
 			"Identifier", "Attempt", "Due In", "Error")
-		fmt.Fprintf(&b, "  %-20s %8s %12s  %s\n",
-			strings.Repeat("─", 20),
+		fmt.Fprintf(&b, "  %-24s %8s %12s  %s\n",
+			strings.Repeat("─", 24),
 			strings.Repeat("─", 8),
 			strings.Repeat("─", 12),
 			strings.Repeat("─", 30))
@@ -159,8 +159,8 @@ func (m Model) View() string {
 			if entry.Error != nil {
 				errStr = *entry.Error
 			}
-			fmt.Fprintf(&b, "  %-20s %8d %12s  %s\n",
-				truncate(entry.Identifier, 20),
+			fmt.Fprintf(&b, "  %-24s %8d %12s  %s\n",
+				truncate(entry.Identifier, 24),
 				entry.Attempt,
 				dueIn.String(),
 				truncate(errStr, 40))

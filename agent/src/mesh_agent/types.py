@@ -39,6 +39,9 @@ class StdinPayload:
     workspace: str
     config: AgentConfig
     attempt: Optional[int] = None
+    system_prompt: str = ""
+    continuation_prompt: str = ""
+    terminal_prompt: str = ""
 
 
 @dataclass

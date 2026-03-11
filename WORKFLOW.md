@@ -14,4 +14,4 @@ server:
 ---
 You are working on issue {{ issue.identifier }}.
 
-{{ issue.body }}
+{{ issue.description }}

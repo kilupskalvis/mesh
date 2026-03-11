@@ -8,6 +8,7 @@ import (
 
 	"github.com/kalvis/mesh/internal/logging"
 	"github.com/kalvis/mesh/internal/model"
+	"github.com/kalvis/mesh/internal/prompts"
 	"github.com/kalvis/mesh/internal/runner"
 	"github.com/kalvis/mesh/internal/template"
 	"github.com/kalvis/mesh/internal/workspace"
@@ -51,12 +52,19 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		return err
 	}
 
-	// 5. Build stdin payload.
+	// 5. Resolve workflow system prompt.
+	systemPrompt := o.config.AgentSystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = prompts.DefaultForTracker(o.config.TrackerKind)
+	}
+
+	// 6. Build stdin payload.
 	payload := model.StdinPayload{
-		Issue:     issue,
-		Prompt:    prompt,
-		Attempt:   attempt,
-		Workspace: wsPath,
+		Issue:        issue,
+		Prompt:       prompt,
+		SystemPrompt: systemPrompt,
+		Attempt:      attempt,
+		Workspace:    runner.ContainerWorkDir,
 		Config: model.StdinPayloadConfig{
 			TurnTimeoutMs:  o.config.TurnTimeoutMs,
 			MaxTurns:       o.config.MaxTurns,
@@ -76,6 +84,7 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 
 	proxyBase := fmt.Sprintf("http://host.docker.internal:%d", o.config.ProxyListenPort)
 	envVars["ANTHROPIC_BASE_URL"] = proxyBase
+	envVars["ANTHROPIC_API_KEY"] = "sk-proxy"  // Placeholder — proxy injects the real key.
 	envVars["PYTHONUNBUFFERED"] = "1"
 
 	switch o.config.TrackerKind {

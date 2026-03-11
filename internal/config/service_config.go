@@ -53,6 +53,7 @@ type ServiceConfig struct {
 	DockerNetwork        string
 	DockerExtraEnv       map[string]string
 	AgentModel           string
+	AgentSystemPrompt    string
 	ApprovalPolicy       string
 	Sandbox              string
 	SandboxPolicy        string
@@ -229,7 +230,7 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 	cfg.MaxTurns = getNestedInt(raw, 20, "agent", "max_turns")
 	cfg.MaxRetryBackoffMs = getNestedInt(raw, 300000, "agent", "max_retry_backoff_ms")
 	cfg.TurnTimeoutMs = getNestedInt(raw, 3600000, "agent", "turn_timeout_ms")
-	cfg.ReadTimeoutMs = getNestedInt(raw, 5000, "agent", "read_timeout_ms")
+	cfg.ReadTimeoutMs = getNestedInt(raw, 300000, "agent", "read_timeout_ms")
 	cfg.StallTimeoutMs = getNestedInt(raw, 300000, "agent", "stall_timeout_ms")
 
 	// Per-state concurrency
@@ -277,6 +278,9 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 	if cfg.AgentModel == "" {
 		cfg.AgentModel = "claude-sonnet-4-6"
 	}
+
+	// Agent system prompt (optional override, defaults to tracker-kind prompt)
+	cfg.AgentSystemPrompt = getNestedString(raw, "agent", "system_prompt")
 
 	// Agent API key
 	rawAPIKey := getNestedString(raw, "agent", "api_key")

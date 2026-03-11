@@ -60,6 +60,9 @@ func NewDockerRunner() *DockerRunner {
 	return &DockerRunner{DockerBin: "docker"}
 }
 
+// ContainerWorkDir is the working directory inside the agent container.
+const ContainerWorkDir = "/workspace"
+
 // unsafeContainerChars matches characters not allowed in Docker container names.
 var unsafeContainerChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
 
@@ -87,11 +90,11 @@ func (d *DockerRunner) IsAvailable() error {
 func (d *DockerRunner) buildDockerArgs(params RunParams, containerName string) []string {
 	args := []string{"run", "-i", "--rm", "--name", containerName}
 
-	// Volume mount: host workspace -> /workspace in container.
-	args = append(args, "-v", params.WorkspacePath+":/workspace")
+	// Volume mount: host workspace -> container working directory.
+	args = append(args, "-v", params.WorkspacePath+":"+ContainerWorkDir)
 
 	// Working directory inside container.
-	args = append(args, "-w", "/workspace")
+	args = append(args, "-w", ContainerWorkDir)
 
 	// Environment variables.
 	for k, v := range params.EnvVars {
@@ -111,9 +114,27 @@ func (d *DockerRunner) buildDockerArgs(params RunParams, containerName string) [
 		args = append(args, "--network", params.Network)
 	}
 
+	// Run as non-root user (required by Claude CLI bypassPermissions).
+	args = append(args, "--user", "1000:1000")
+
 	// Image is always last.
 	args = append(args, params.Image)
 	return args
+}
+
+// initWorkspaceOwnership runs a short-lived container to chown the workspace
+// volume so the non-root agent user can write to it.
+func (d *DockerRunner) initWorkspaceOwnership(params RunParams) error {
+	cmd := exec.Command(d.DockerBin, "run", "--rm",
+		"-v", params.WorkspacePath+":"+ContainerWorkDir,
+		"--entrypoint", "chown",
+		params.Image,
+		"-R", "1000:1000", ContainerWorkDir,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w", string(out), err)
+	}
+	return nil
 }
 
 // Run starts an agent container, writes the JSON payload to stdin, and streams
@@ -124,6 +145,11 @@ func (d *DockerRunner) buildDockerArgs(params RunParams, containerName string) [
 // The caller should select on the event channel for streaming updates and the
 // result channel for the final outcome. Cancelling ctx will stop the container.
 func (d *DockerRunner) Run(ctx context.Context, params RunParams) (<-chan model.AgentEvent, <-chan RunResult, error) {
+	// Init step: chown workspace so the non-root container user can write.
+	if err := d.initWorkspaceOwnership(params); err != nil {
+		return nil, nil, fmt.Errorf("init workspace ownership: %w", err)
+	}
+
 	containerName := ContainerName(fmt.Sprintf("%d", time.Now().UnixNano()))
 
 	args := d.buildDockerArgs(params, containerName)
