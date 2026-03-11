@@ -15,9 +15,14 @@
 __pycache__/
 *.egg-info/
 .coverage
+.venv/
+.pytest_cache/
 
 # Worktrees
 .worktrees/
 
 # Local mesh config/plans
 .mesh/
+
+# Claude Code
+.claude/
