@@ -1,0 +1,43 @@
+pre-commit:
+  parallel: true
+  commands:
+    # Go checks
+    fmt-check:
+      run: test -z "$(gofmt -l . 2>&1)" || (gofmt -l . && exit 1)
+      glob: "*.go"
+    vet:
+      run: go vet ./...
+    staticcheck:
+      run: |
+        if command -v staticcheck >/dev/null 2>&1; then
+          staticcheck ./...
+        elif [ -x ~/go/bin/staticcheck ]; then
+          ~/go/bin/staticcheck ./...
+        fi
+    go-test:
+      run: go test ./... -short
+    mod-tidy:
+      run: |
+        cp go.mod go.mod.bak
+        go mod tidy
+        diff -q go.mod go.mod.bak > /dev/null 2>&1
+        result=$?
+        rm go.mod.bak
+        if [ $result -ne 0 ]; then
+          echo "go.mod is not tidy. Run 'go mod tidy'"
+          exit 1
+        fi
+
+    # Python checks
+    ruff-check:
+      root: "agent/"
+      run: uv run ruff check src/ tests/
+    ruff-format:
+      root: "agent/"
+      run: uv run ruff format --check src/ tests/
+    pyright:
+      root: "agent/"
+      run: uv run pyright src/
+    python-test:
+      root: "agent/"
+      run: uv run -- python -m pytest tests/ -q
