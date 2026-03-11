@@ -54,6 +54,9 @@ type ServiceConfig struct {
 	Sandbox              string
 	SandboxPolicy        string
 
+	// Agent API key
+	ClaudeAPIKey string
+
 	// Observability
 	SentryDSN string
 
@@ -255,6 +258,14 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 	if cfg.AgentModel == "" {
 		cfg.AgentModel = "claude-sonnet-4-6"
 	}
+
+	// Agent API key
+	rawAPIKey := getNestedString(raw, "agent", "api_key")
+	if rawAPIKey == "" {
+		rawAPIKey = "$CLAUDE_API_KEY"
+	}
+	apiKey, _ := resolveEnvVar(rawAPIKey)
+	cfg.ClaudeAPIKey = apiKey
 
 	// Agent policy (implementation-defined defaults)
 	cfg.ApprovalPolicy = getNestedString(raw, "agent", "approval_policy")

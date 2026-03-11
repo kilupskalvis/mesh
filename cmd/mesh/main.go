@@ -45,7 +45,12 @@ func run(args []string) error {
 		workflowPath = fs.Arg(0)
 	}
 
-	// 2. Load and validate WORKFLOW.md
+	// 2. Load .env if present (populates environment before config resolution)
+	if err := config.LoadDotEnv(".env"); err != nil {
+		return fmt.Errorf("failed to load .env: %w", err)
+	}
+
+	// 3. Load and validate WORKFLOW.md
 	wf, err := config.LoadWorkflow(workflowPath)
 	if err != nil {
 		return fmt.Errorf("failed to load workflow: %w", err)
@@ -137,7 +142,7 @@ func run(args []string) error {
 	// 7b. Start credential proxy.
 	proxyCfg := &proxy.Config{
 		ListenPort:   cfg.ProxyListenPort,
-		ClaudeAPIKey: os.Getenv("CLAUDE_API_KEY"),
+		ClaudeAPIKey: cfg.ClaudeAPIKey,
 		JiraEndpoint: cfg.TrackerEndpoint,
 		JiraEmail:    cfg.TrackerEmail,
 		JiraAPIToken: cfg.TrackerAPIToken,

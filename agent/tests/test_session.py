@@ -124,7 +124,7 @@ def _run_session_with_client(
                         with patch("mesh_agent.session.build_sdk_options", return_value=MagicMock()):
                             if check_state is not None:
                                 with patch(
-                                    "mesh_agent.session.check_jira_state",
+                                    "mesh_agent.session.check_issue_state",
                                     return_value=check_state,
                                 ):
                                     return asyncio.run(run_session(payload, emitter))

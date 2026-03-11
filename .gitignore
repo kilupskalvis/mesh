@@ -24,5 +24,8 @@ __pycache__/
 # Local mesh config/plans
 .mesh/
 
+# Secrets
+.env
+
 # Claude Code
 .claude/
