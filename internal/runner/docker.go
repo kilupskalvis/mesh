@@ -115,6 +115,10 @@ func (d *DockerRunner) buildDockerArgs(params RunParams, containerName string) [
 		args = append(args, "--network", params.Network)
 	}
 
+	// Ensure host.docker.internal resolves inside the container.
+	// On macOS/Windows Docker Desktop this is automatic; on Linux it is not.
+	args = append(args, "--add-host", "host.docker.internal:host-gateway")
+
 	// Run as non-root user (required by Claude CLI bypassPermissions).
 	args = append(args, "--user", "1000:1000")
 
