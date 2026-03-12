@@ -32,12 +32,12 @@ func TestGitHubClient_FetchCandidateIssues(t *testing.T) {
 
 		issues := []ghIssue{
 			{Number: 1, Title: "Fix bug", Body: "Description here", State: "open",
-				HTMLURL: "https://github.com/testowner/testrepo/issues/1",
-				Labels:  []ghLabel{{Name: "mesh"}, {Name: "Bug"}},
+				HTMLURL:   "https://github.com/testowner/testrepo/issues/1",
+				Labels:    []ghLabel{{Name: "mesh"}, {Name: "Bug"}},
 				CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z"},
 			{Number: 2, Title: "Add feature", State: "open",
-				HTMLURL: "https://github.com/testowner/testrepo/issues/2",
-				Labels:  []ghLabel{{Name: "mesh"}},
+				HTMLURL:   "https://github.com/testowner/testrepo/issues/2",
+				Labels:    []ghLabel{{Name: "mesh"}},
 				CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z"},
 		}
 		json.NewEncoder(w).Encode(issues)
@@ -111,13 +111,13 @@ func TestGitHubClient_Pagination(t *testing.T) {
 				issues = append(issues, ghIssue{
 					Number: i, Title: "Issue", State: "open",
 					HTMLURL: "https://github.com/o/r/issues/1",
-					Labels: []ghLabel{}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"})
+					Labels:  []ghLabel{}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"})
 			}
 		} else {
 			issues = append(issues, ghIssue{
 				Number: 101, Title: "Last Issue", State: "open",
 				HTMLURL: "https://github.com/o/r/issues/101",
-				Labels: []ghLabel{}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"})
+				Labels:  []ghLabel{}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"})
 		}
 		json.NewEncoder(w).Encode(issues)
 	}))
@@ -159,7 +159,7 @@ func TestGitHubClient_FetchIssueStatesByIDs(t *testing.T) {
 		issue := ghIssue{
 			Number: 42, Title: "Reconcile Me", State: "closed",
 			HTMLURL: "https://github.com/testowner/testrepo/issues/42",
-			Labels: []ghLabel{}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-05T00:00:00Z"}
+			Labels:  []ghLabel{}, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-05T00:00:00Z"}
 		json.NewEncoder(w).Encode(issue)
 	}))
 	defer server.Close()

@@ -12,19 +12,19 @@ import (
 // front matter plus environment variable resolution.
 type ServiceConfig struct {
 	// Tracker
-	TrackerKind       string
-	TrackerEndpoint   string
-	TrackerEmail      string
-	TrackerAPIToken   string
-	TrackerProjectKey string
-	TrackerOwner          string
-	TrackerRepo           string
-	TrackerLabel          string
-	GitHubAppID           string
-	GitHubAppPrivateKey   string // path to .pem file
-	GitHubInstallationID  string
-	ActiveStates          []string
-	TerminalStates        []string
+	TrackerKind          string
+	TrackerEndpoint      string
+	TrackerEmail         string
+	TrackerAPIToken      string
+	TrackerProjectKey    string
+	TrackerOwner         string
+	TrackerRepo          string
+	TrackerLabel         string
+	GitHubAppID          string
+	GitHubAppPrivateKey  string // path to .pem file
+	GitHubInstallationID string
+	ActiveStates         []string
+	TerminalStates       []string
 
 	// Polling
 	PollIntervalMs int

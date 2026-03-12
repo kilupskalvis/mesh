@@ -15,16 +15,35 @@ func (m *Manager) basePath() string {
 }
 
 // runGit runs a git command and returns combined output.
+// It strips GIT_DIR, GIT_INDEX_FILE, and GIT_WORK_TREE from the environment
+// so that git uses cmd.Dir instead of inheriting stale values (e.g. from a
+// pre-commit hook context).
 func (m *Manager) runGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command(m.GitBin, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	cmd.Env = CleanGitEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("git %s: %s: %w", strings.Join(args, " "), string(out), err)
 	}
 	return string(out), nil
+}
+
+// CleanGitEnv returns env with git-specific variables removed so that
+// subprocess git commands use their own working directory, not inherited paths.
+func CleanGitEnv(env []string) []string {
+	filtered := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_DIR=") ||
+			strings.HasPrefix(e, "GIT_INDEX_FILE=") ||
+			strings.HasPrefix(e, "GIT_WORK_TREE=") {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
 }
 
 // EnsureBase creates the shared bare clone if it doesn't exist.

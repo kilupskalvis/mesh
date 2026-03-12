@@ -33,6 +33,7 @@ def _mock_session(method: str, status: int, json_data: dict) -> AsyncMock:
     # (not a coroutine), because aiohttp uses `async with session.get(...)`.
     mock_session = AsyncMock()
     from unittest.mock import MagicMock
+
     setattr(mock_session, method, MagicMock(return_value=mock_resp))
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
@@ -60,18 +61,26 @@ def test_github_comment_success():
 
 
 def test_github_create_pr_success():
-    mock_session = _mock_session("post", 201, {
-        "number": 42,
-        "html_url": "https://github.com/owner/repo/pull/42",
-    })
+    mock_session = _mock_session(
+        "post",
+        201,
+        {
+            "number": 42,
+            "html_url": "https://github.com/owner/repo/pull/42",
+        },
+    )
 
     with patch("mesh_agent.tools.github_tools.aiohttp.ClientSession", return_value=mock_session):
         with patch.dict("os.environ", _ENV):
-            result = asyncio.run(github_create_pr.handler({
-                "title": "Fix bug",
-                "body": "Fixes #42",
-                "head": "fix-branch",
-            }))
+            result = asyncio.run(
+                github_create_pr.handler(
+                    {
+                        "title": "Fix bug",
+                        "body": "Fixes #42",
+                        "head": "fix-branch",
+                    }
+                )
+            )
 
     assert "PR #42" in result["content"][0]["text"]
 

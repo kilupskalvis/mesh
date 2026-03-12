@@ -120,7 +120,7 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 
 	proxyBase := fmt.Sprintf("http://host.docker.internal:%d", o.config.ProxyListenPort)
 	envVars["ANTHROPIC_BASE_URL"] = proxyBase
-	envVars["ANTHROPIC_API_KEY"] = "sk-proxy"  // Placeholder — proxy injects the real key.
+	envVars["ANTHROPIC_API_KEY"] = "sk-proxy" // Placeholder — proxy injects the real key.
 	envVars["PYTHONUNBUFFERED"] = "1"
 
 	switch o.config.TrackerKind {
@@ -293,4 +293,3 @@ func buildSystemPrompt(base string, issue model.Issue, workspace, branch string)
 	}
 	return b.String()
 }
-

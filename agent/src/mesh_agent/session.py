@@ -13,9 +13,7 @@ from .types import SessionResult, StdinPayload
 logger = logging.getLogger(__name__)
 
 
-async def run_session(
-    payload: StdinPayload, emitter: EventEmitter
-) -> SessionResult:
+async def run_session(payload: StdinPayload, emitter: EventEmitter) -> SessionResult:
     """Run the Claude Agent SDK session as a single query/response cycle.
 
     The SDK handles all turns internally (up to max_turns tool-use cycles).

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/kalvis/mesh/internal/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +113,7 @@ func TestGitHubHandler_Push(t *testing.T) {
 	// Create a bare remote.
 	cmd := exec.Command("git", "init", "--bare")
 	cmd.Dir = remote
+	cmd.Env = workspace.CleanGitEnv(os.Environ())
 	require.NoError(t, cmd.Run())
 
 	// Create a local repo with a commit.
@@ -121,6 +123,7 @@ func TestGitHubHandler_Push(t *testing.T) {
 	} {
 		c := exec.Command("git", args...)
 		c.Dir = dir
+		c.Env = workspace.CleanGitEnv(os.Environ())
 		require.NoError(t, c.Run())
 	}
 	require.NoError(t, os.WriteFile(dir+"/file.txt", []byte("hello"), 0o644))
@@ -130,7 +133,7 @@ func TestGitHubHandler_Push(t *testing.T) {
 	} {
 		c := exec.Command("git", args...)
 		c.Dir = dir
-		c.Env = append(os.Environ(),
+		c.Env = append(workspace.CleanGitEnv(os.Environ()),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
 			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
 		)

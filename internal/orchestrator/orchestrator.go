@@ -41,13 +41,13 @@ type StateSnapshot struct {
 // single goroutine (the poll loop), so no mutexes are needed.
 type Orchestrator struct {
 	// Dependencies (injected)
-	tracker            TrackerClient
-	runner             runner.Runner
-	workspace          *workspace.Manager
-	config             *config.ServiceConfig
-	promptTmpl         string
-	logger             *slog.Logger
-	errorReporter      ErrorReporter
+	tracker             TrackerClient
+	runner              runner.Runner
+	workspace           *workspace.Manager
+	config              *config.ServiceConfig
+	promptTmpl          string
+	logger              *slog.Logger
+	errorReporter       ErrorReporter
 	githubTokenProvider func() (string, error) // optional; set for github tracker kind
 
 	// State

@@ -19,7 +19,7 @@ func createSourceRepo(t *testing.T) string {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(CleanGitEnv(os.Environ()),
 			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
 			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
 		)
@@ -82,7 +82,7 @@ func TestFetch_UpdatesRefs(t *testing.T) {
 	// Add a new commit to source
 	cmd := exec.Command("git", "commit", "--allow-empty", "-m", "second")
 	cmd.Dir = src
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(CleanGitEnv(os.Environ()),
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
 	)

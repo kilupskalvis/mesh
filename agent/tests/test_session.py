@@ -7,7 +7,6 @@ from io import StringIO
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from mesh_agent.events import EventEmitter
 from mesh_agent.session import run_session
@@ -16,9 +15,7 @@ from mesh_agent.types import AgentConfig, IssueState, SessionResult, StdinPayloa
 
 def _make_payload(**overrides: Any) -> StdinPayload:
     defaults: dict[str, Any] = {
-        "issue": IssueState(
-            id="1", identifier="PROJ-1", title="Fix login", state="To Do"
-        ),
+        "issue": IssueState(id="1", identifier="PROJ-1", title="Fix login", state="To Do"),
         "prompt": "Fix the login bug",
         "workspace": "/workspaces/issue-10042-fix-login",
         "config": AgentConfig(max_turns=20),
@@ -92,7 +89,9 @@ def _run(payload: StdinPayload, emitter: EventEmitter, client: FakeClient) -> Se
             with patch("mesh_agent.session.AssistantMessage", FakeAssistantMessage):
                 with patch("mesh_agent.session.ResultMessage", FakeResultMessage):
                     with patch("mesh_agent.session.TextBlock", FakeTextBlock):
-                        with patch("mesh_agent.session.build_sdk_options", return_value=MagicMock()):
+                        with patch(
+                            "mesh_agent.session.build_sdk_options", return_value=MagicMock()
+                        ):
                             return asyncio.run(run_session(payload, emitter))
 
 
@@ -130,10 +129,12 @@ def test_session_error_result() -> None:
     """Session should emit error event on error result."""
     payload = _make_payload()
     emitter = _make_emitter()
-    client = FakeClient([
-        FakeAssistantMessage("Something went wrong"),
-        FakeResultMessage("error", "sid-1"),
-    ])
+    client = FakeClient(
+        [
+            FakeAssistantMessage("Something went wrong"),
+            FakeResultMessage("error", "sid-1"),
+        ]
+    )
 
     result = _run(payload, emitter, client)
 

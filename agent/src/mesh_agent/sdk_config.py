@@ -35,12 +35,14 @@ def build_sdk_options(payload: StdinPayload) -> ClaudeAgentOptions:
             "github", tools=[github_get_state, github_comment, github_create_pr, github_push]
         )
         mcp_servers["github"] = github_mcp
-        allowed_tools.extend([
-            "mcp__github__github_get_state",
-            "mcp__github__github_comment",
-            "mcp__github__github_create_pr",
-            "mcp__github__github_push",
-        ])
+        allowed_tools.extend(
+            [
+                "mcp__github__github_get_state",
+                "mcp__github__github_comment",
+                "mcp__github__github_create_pr",
+                "mcp__github__github_push",
+            ]
+        )
 
     opts = ClaudeAgentOptions(
         allowed_tools=allowed_tools,
