@@ -65,8 +65,8 @@ def test_jira_comment() -> None:
     os.environ["JIRA_ISSUE_KEY"] = "PROJ-1"
 
     try:
-        result = _run_async(jira_comment({"body": "Test comment"}))
-        assert "1" in result  # comment id
+        result = _run_async(jira_comment.handler({"body": "Test comment"}))
+        assert "1" in result["content"][0]["text"]  # comment id
     finally:
         for k in ["JIRA_ENDPOINT", "JIRA_ISSUE_ID", "JIRA_ISSUE_KEY"]:
             os.environ.pop(k, None)
@@ -83,8 +83,8 @@ def test_jira_get_state() -> None:
     os.environ["JIRA_ISSUE_KEY"] = "PROJ-1"
 
     try:
-        result = _run_async(jira_get_state({}))
-        assert "In Progress" in result
+        result = _run_async(jira_get_state.handler({}))
+        assert "In Progress" in result["content"][0]["text"]
     finally:
         for k in ["JIRA_ENDPOINT", "JIRA_ISSUE_KEY"]:
             os.environ.pop(k, None)

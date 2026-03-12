@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -176,6 +177,29 @@ func run(args []string) error {
 	}
 	logger.Info("credential proxy started", "port", cfg.ProxyListenPort)
 	defer proxyInstance.Stop()
+
+	// 7c. Start GitHub proxy handler (Go HTTP server alongside nginx).
+	if cfg.TrackerKind == "github" && githubTokenProvider != nil {
+		ghHandler := proxy.NewGitHubHandler("https://api.github.com", githubTokenProvider)
+		ghPort := cfg.ProxyListenPort + 1
+		ghServer := &http.Server{
+			Addr:    fmt.Sprintf(":%d", ghPort),
+			Handler: ghHandler,
+		}
+		go func() {
+			if err := ghServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("GitHub proxy handler failed", "error", err)
+			}
+		}()
+		// Wait briefly for the server to start.
+		time.Sleep(50 * time.Millisecond)
+		logger.Info("GitHub proxy handler started", "port", ghPort)
+		defer func() {
+			shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer shutCancel()
+			_ = ghServer.Shutdown(shutCtx)
+		}()
+	}
 
 	// 8. Create and start orchestrator
 	ctx, cancel := context.WithCancel(context.Background())
