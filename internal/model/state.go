@@ -108,14 +108,12 @@ type LogEntry struct {
 
 // StdinPayload is the JSON object written to the agent container's stdin.
 type StdinPayload struct {
-	Issue              Issue              `json:"issue"`
-	Prompt             string             `json:"prompt"`
-	SystemPrompt       string             `json:"system_prompt"`
-	ContinuationPrompt string             `json:"continuation_prompt,omitempty"`
-	TerminalPrompt     string             `json:"terminal_prompt,omitempty"`
-	Attempt            *int               `json:"attempt"`
-	Workspace          string             `json:"workspace"`
-	Config             StdinPayloadConfig `json:"config"`
+	Issue        Issue              `json:"issue"`
+	Prompt       string             `json:"prompt"`
+	SystemPrompt string             `json:"system_prompt"`
+	Attempt      *int               `json:"attempt"`
+	Workspace    string             `json:"workspace"`
+	Config       StdinPayloadConfig `json:"config"`
 }
 
 // StdinPayloadConfig carries agent config values to the container.
