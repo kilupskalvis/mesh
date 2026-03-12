@@ -10,7 +10,7 @@ import (
 
 func TestRender_BasicIssue(t *testing.T) {
 	t.Parallel()
-	tmpl := "Working on {{ issue.identifier }}: {{ issue.title }}"
+	tmpl := "Working on {{ .Issue.Identifier }}: {{ .Issue.Title }}"
 	issue := model.Issue{
 		ID: "1", Identifier: "PROJ-123", Title: "Fix bug", State: "To Do",
 	}
@@ -21,7 +21,7 @@ func TestRender_BasicIssue(t *testing.T) {
 
 func TestRender_WithAttempt(t *testing.T) {
 	t.Parallel()
-	tmpl := "Attempt: {{ attempt }}"
+	tmpl := "Attempt: {{ .Attempt }}"
 	issue := model.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "S"}
 	attempt := 3
 	result, err := Render(tmpl, issue, &attempt)
@@ -31,7 +31,7 @@ func TestRender_WithAttempt(t *testing.T) {
 
 func TestRender_NullAttempt(t *testing.T) {
 	t.Parallel()
-	tmpl := "{% if attempt %}Retry {{ attempt }}{% else %}First run{% endif %}"
+	tmpl := "{{ if .Attempt }}Retry {{ .Attempt }}{{ else }}First run{{ end }}"
 	issue := model.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "S"}
 	result, err := Render(tmpl, issue, nil)
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestRender_NullAttempt(t *testing.T) {
 
 func TestRender_Labels(t *testing.T) {
 	t.Parallel()
-	tmpl := "Labels: {% for l in issue.labels %}{{ l }} {% endfor %}"
+	tmpl := "Labels: {{ range .Issue.Labels }}{{ . }} {{ end }}"
 	issue := model.Issue{
 		ID: "1", Identifier: "X-1", Title: "T", State: "S",
 		Labels: []string{"bug", "urgent"},
@@ -56,4 +56,12 @@ func TestRender_EmptyTemplate_ReturnsDefaultPrompt(t *testing.T) {
 	result, err := Render("", issue, nil)
 	require.NoError(t, err)
 	assert.Equal(t, defaultPrompt, result)
+}
+
+func TestRender_InvalidSyntax_ReturnsError(t *testing.T) {
+	t.Parallel()
+	issue := model.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "S"}
+	_, err := Render("{{ .BadField }", issue, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "template")
 }
