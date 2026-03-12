@@ -55,11 +55,12 @@ func (o *Orchestrator) ScheduleRetry(issueID, identifier string, attempt int, is
 	}
 
 	entry := &model.RetryEntry{
-		IssueID:    issueID,
-		Identifier: identifier,
-		Attempt:    attempt,
-		DueAtMs:    dueAtMs,
-		Error:      errPtr,
+		IssueID:        issueID,
+		Identifier:     identifier,
+		Attempt:        attempt,
+		DueAtMs:        dueAtMs,
+		Error:          errPtr,
+		IsContinuation: isContinuation,
 	}
 
 	o.retryQueue[issueID] = entry
@@ -133,7 +134,7 @@ func (o *Orchestrator) ProcessRetries(ctx context.Context) {
 
 		// Dispatch.
 		retryAttempt := retry.Attempt
-		if err := o.DispatchIssue(ctx, issue, &retryAttempt); err != nil {
+		if err := o.DispatchIssue(ctx, issue, &retryAttempt, retry.IsContinuation); err != nil {
 			retryLogger.Error("retry dispatch failed", "error", err)
 			// Re-schedule with incremented attempt.
 			nextAttempt := retry.Attempt + 1

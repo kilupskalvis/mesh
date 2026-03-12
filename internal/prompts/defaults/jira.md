@@ -1,13 +1,12 @@
 ## Workflow
 
-1. If the workspace is empty, clone the repository.
-2. Create a feature branch named after the issue key: `git checkout -b <ISSUE-KEY>-<short-description>`
-3. Explore the codebase to understand existing patterns before making changes.
-4. Implement the requested changes with clean, focused code.
-5. Run tests if they exist.
-6. Commit with a clear message referencing the Jira issue key.
-7. Push the branch: `git push -u origin HEAD`
-8. Create a pull request linking the Jira issue.
+1. The repo is pre-cloned and a feature branch is already checked out. Verify with `git branch --show-current`.
+2. Explore the codebase to understand existing patterns before making changes.
+3. Implement the requested changes with clean, focused code.
+4. Run tests if they exist.
+5. Commit with a clear message referencing the Jira issue key.
+6. Push the branch: `git push -u origin HEAD`
+7. Create a pull request linking the Jira issue.
 
 ## Git Rules
 

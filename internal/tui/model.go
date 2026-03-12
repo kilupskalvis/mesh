@@ -9,9 +9,11 @@ import (
 // This mirrors orchestrator.StateSnapshot so the TUI package does not
 // depend on the orchestrator package.
 type Snapshot struct {
-	Running     []model.RunningEntry
-	RetryQueue  []model.RetryEntry
-	Completed   int
-	AgentTotals model.AgentTotals
-	RateLimits  *model.RateLimitSnapshot
+	Running          []model.RunningEntry
+	RetryQueue       []model.RetryEntry
+	Completed        int
+	CompletedHistory []model.CompletedEntry
+	ActivityLog      []model.LogEntry
+	AgentTotals      model.AgentTotals
+	RateLimits       *model.RateLimitSnapshot
 }

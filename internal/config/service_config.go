@@ -30,7 +30,8 @@ type ServiceConfig struct {
 	PollIntervalMs int
 
 	// Workspace
-	WorkspaceRoot string
+	WorkspaceRoot    string
+	WorkspaceRepoURL string
 
 	// Hooks
 	AfterCreateHook  string
@@ -196,6 +197,13 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 		wsRoot = resolved
 	}
 	cfg.WorkspaceRoot = expandHome(wsRoot)
+
+	// Workspace repo URL (for bare clone). Must be set explicitly in WORKFLOW.md.
+	wsRepoURL := getNestedString(raw, "workspace", "repo_url")
+	if resolved, ok := resolveEnvVar(wsRepoURL); ok {
+		wsRepoURL = resolved
+	}
+	cfg.WorkspaceRepoURL = wsRepoURL
 
 	// Hooks
 	hooksMap := getNestedMap(raw, "hooks")

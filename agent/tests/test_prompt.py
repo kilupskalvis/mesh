@@ -10,13 +10,13 @@ def test_build_system_prompt_basic() -> None:
     payload = StdinPayload(
         issue=IssueState(id="1", identifier="PROJ-1", title="Fix login", state="To Do"),
         prompt="Fix it",
-        workspace="/workspace",
+        workspace="/workspaces/issue-1-fix-login",
         config=AgentConfig(),
     )
     result = build_system_prompt(payload)
     assert "PROJ-1" in result
     assert "Fix login" in result
-    assert "/workspace" in result
+    assert "/workspaces/issue-1-fix-login" in result
 
 
 def test_build_system_prompt_with_description() -> None:

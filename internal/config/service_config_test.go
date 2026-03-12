@@ -27,7 +27,7 @@ func TestServiceConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 20, cfg.MaxTurns)
 	assert.Equal(t, 300000, cfg.MaxRetryBackoffMs)
 	assert.Equal(t, 3600000, cfg.TurnTimeoutMs)
-	assert.Equal(t, 5000, cfg.ReadTimeoutMs)
+	assert.Equal(t, 300000, cfg.ReadTimeoutMs)
 	assert.Equal(t, 300000, cfg.StallTimeoutMs)
 	assert.Equal(t, 60000, cfg.HookTimeoutMs)
 	assert.Equal(t, "mesh-agent:latest", cfg.AgentImage)

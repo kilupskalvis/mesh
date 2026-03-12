@@ -69,6 +69,29 @@ func renderDashboardHTML(w io.Writer, snap orchestrator.StateSnapshot) {
 		fmt.Fprint(w, `</table>`)
 	}
 
+	// Completed history
+	if len(snap.CompletedHistory) > 0 {
+		fmt.Fprint(w, `<h2>Completed</h2>
+<table>
+<tr><th>Status</th><th>Identifier</th><th>Title</th><th>Tokens</th><th>Duration</th><th>When</th></tr>`)
+		limit := len(snap.CompletedHistory)
+		if limit > 10 {
+			limit = 10
+		}
+		for _, e := range snap.CompletedHistory[:limit] {
+			indicator := "✓"
+			if e.Status == "error" {
+				indicator = "✗"
+			} else if e.Status == "cancelled" {
+				indicator = "⊘"
+			}
+			fmt.Fprintf(w, `<tr><td>%s %s</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%s</td></tr>`,
+				indicator, e.Status, e.Identifier, e.Title, e.TotalTokens,
+				e.Duration.Truncate(time.Second), e.CompletedAt.Format("15:04:05"))
+		}
+		fmt.Fprint(w, `</table>`)
+	}
+
 	// Totals
 	dur := time.Duration(snap.AgentTotals.SecondsRunning * float64(time.Second))
 	fmt.Fprintf(w, `<h2>Totals</h2>

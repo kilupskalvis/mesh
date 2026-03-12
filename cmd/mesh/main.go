@@ -146,6 +146,14 @@ func run(args []string) error {
 
 	// 7. Workspace manager
 	ws := workspace.NewManager(cfg.WorkspaceRoot)
+	ws.RepoURL = cfg.WorkspaceRepoURL
+
+	// Initialize bare clone for worktree operations if repo URL is configured.
+	if ws.RepoURL != "" {
+		if err := ws.EnsureBase(); err != nil {
+			return fmt.Errorf("workspace base setup: %w", err)
+		}
+	}
 
 	// 7b. Start credential proxy.
 	proxyCfg := &proxy.Config{
@@ -224,11 +232,13 @@ func run(args []string) error {
 			case <-ticker.C:
 				snap := orch.Snapshot()
 				tuiSnap := tui.Snapshot{
-					Running:     snap.Running,
-					RetryQueue:  snap.RetryQueue,
-					Completed:   snap.Completed,
-					AgentTotals: snap.AgentTotals,
-					RateLimits:  snap.RateLimits,
+					Running:          snap.Running,
+					RetryQueue:       snap.RetryQueue,
+					Completed:        snap.Completed,
+					CompletedHistory: snap.CompletedHistory,
+					ActivityLog:      snap.ActivityLog,
+					AgentTotals:      snap.AgentTotals,
+					RateLimits:       snap.RateLimits,
 				}
 				select {
 				case snapshotCh <- tuiSnap:

@@ -1,14 +1,13 @@
 ## Workflow
 
-1. If the workspace is empty, clone the repo: `gh repo clone $GITHUB_REPO .`
-2. Create a feature branch: `git checkout -b issue-<number>-<short-description>`
-3. Explore the codebase to understand existing patterns before making changes.
-4. Implement the requested changes with clean, focused code.
-5. Run tests if they exist (look for Makefile, package.json scripts, pytest, etc.).
-6. Commit with a clear message referencing the issue number.
-7. Push the branch: `git push -u origin HEAD`
-8. Create a pull request: `gh pr create --fill`
-9. Close the issue: `gh issue close $GITHUB_ISSUE_NUMBER --repo $GITHUB_REPO`
+1. The repo is pre-cloned and a feature branch is already checked out. Verify with `git branch --show-current`.
+2. Explore the codebase to understand existing patterns before making changes.
+3. Implement the requested changes with clean, focused code.
+4. Run tests if they exist (look for Makefile, package.json scripts, pytest, etc.).
+5. Commit with a clear message referencing the issue number.
+6. Push the branch: `git push -u origin HEAD`
+7. Create a pull request: `gh pr create --fill`
+8. Close the issue: `gh issue close $GITHUB_ISSUE_NUMBER --repo $GITHUB_REPO`
 
 ## Git Rules
 

@@ -28,11 +28,13 @@ type ErrorReporter interface {
 
 // StateSnapshot is a point-in-time copy of orchestrator state for the TUI.
 type StateSnapshot struct {
-	Running     []model.RunningEntry
-	RetryQueue  []model.RetryEntry
-	Completed   int
-	AgentTotals model.AgentTotals
-	RateLimits  *model.RateLimitSnapshot
+	Running          []model.RunningEntry
+	RetryQueue       []model.RetryEntry
+	Completed        int
+	CompletedHistory []model.CompletedEntry
+	ActivityLog      []model.LogEntry
+	AgentTotals      model.AgentTotals
+	RateLimits       *model.RateLimitSnapshot
 }
 
 // Orchestrator owns all in-memory scheduling state. All mutations happen in a
@@ -49,12 +51,14 @@ type Orchestrator struct {
 	githubTokenProvider func() (string, error) // optional; set for github tracker kind
 
 	// State
-	running         map[string]*model.RunningEntry // issue_id -> running entry
-	claimed         map[string]bool                // issue_id -> true
-	retryQueue      map[string]*model.RetryEntry   // issue_id -> retry entry
-	completed       map[string]bool                // issue_id -> true (bookkeeping only)
-	agentTotals     model.AgentTotals
-	agentRateLimits *model.RateLimitSnapshot
+	running          map[string]*model.RunningEntry // issue_id -> running entry
+	claimed          map[string]bool                // issue_id -> true
+	retryQueue       map[string]*model.RetryEntry   // issue_id -> retry entry
+	completed        map[string]bool                // issue_id -> true (bookkeeping only)
+	completedHistory []model.CompletedEntry         // most recent first, capped
+	activityLog      []model.LogEntry               // most recent last, capped
+	agentTotals      model.AgentTotals
+	agentRateLimits  *model.RateLimitSnapshot
 
 	// Channels
 	stopCh    chan struct{}
@@ -217,14 +221,24 @@ func (o *Orchestrator) Snapshot() StateSnapshot {
 	return <-replyCh
 }
 
+const (
+	maxCompletedHistory = 50
+	maxActivityLog      = 100
+)
+
 func (o *Orchestrator) buildSnapshot() StateSnapshot {
 	snap := StateSnapshot{
-		Running:     make([]model.RunningEntry, 0, len(o.running)),
-		RetryQueue:  make([]model.RetryEntry, 0, len(o.retryQueue)),
-		Completed:   len(o.completed),
-		AgentTotals: o.agentTotals,
-		RateLimits:  o.agentRateLimits,
+		Running:          make([]model.RunningEntry, 0, len(o.running)),
+		RetryQueue:       make([]model.RetryEntry, 0, len(o.retryQueue)),
+		Completed:        len(o.completed),
+		CompletedHistory: make([]model.CompletedEntry, len(o.completedHistory)),
+		ActivityLog:      make([]model.LogEntry, len(o.activityLog)),
+		AgentTotals:      o.agentTotals,
+		RateLimits:       o.agentRateLimits,
 	}
+	copy(snap.CompletedHistory, o.completedHistory)
+	copy(snap.ActivityLog, o.activityLog)
+
 	// Add active-session elapsed time to the cumulative runtime total.
 	now := time.Now()
 	for _, entry := range o.running {
@@ -235,6 +249,27 @@ func (o *Orchestrator) buildSnapshot() StateSnapshot {
 		snap.RetryQueue = append(snap.RetryQueue, *entry)
 	}
 	return snap
+}
+
+// recordCompletion adds a CompletedEntry to the history (most recent first).
+func (o *Orchestrator) recordCompletion(entry model.CompletedEntry) {
+	o.completedHistory = append([]model.CompletedEntry{entry}, o.completedHistory...)
+	if len(o.completedHistory) > maxCompletedHistory {
+		o.completedHistory = o.completedHistory[:maxCompletedHistory]
+	}
+}
+
+// addLog appends an activity log entry (most recent last).
+func (o *Orchestrator) addLog(level, identifier, message string) {
+	o.activityLog = append(o.activityLog, model.LogEntry{
+		Timestamp:  time.Now(),
+		Identifier: identifier,
+		Message:    message,
+		Level:      level,
+	})
+	if len(o.activityLog) > maxActivityLog {
+		o.activityLog = o.activityLog[len(o.activityLog)-maxActivityLog:]
+	}
 }
 
 // tick executes one full poll cycle: reconcile, fetch, filter, sort, dispatch.
@@ -271,7 +306,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 		if !o.hasSlot(issue.State) {
 			break
 		}
-		if err := o.DispatchIssue(ctx, issue, nil); err != nil {
+		if err := o.DispatchIssue(ctx, issue, nil, false); err != nil {
 			o.logger.Error("dispatch failed",
 				"issue", issue.Identifier,
 				"error", err,
@@ -317,8 +352,8 @@ func (o *Orchestrator) cleanup() {
 	}
 }
 
-// CleanupTerminalWorkspaces queries Jira for terminal-state issues and removes
-// their workspace directories. Called once at startup. Failure is non-fatal.
+// CleanupTerminalWorkspaces queries the tracker for terminal-state issues and
+// removes their worktree directories. Called once at startup. Failure is non-fatal.
 func (o *Orchestrator) CleanupTerminalWorkspaces() {
 	issues, err := o.tracker.FetchIssuesByStates(o.config.TerminalStates)
 	if err != nil {
@@ -327,9 +362,16 @@ func (o *Orchestrator) CleanupTerminalWorkspaces() {
 	}
 	cleaned := 0
 	for _, issue := range issues {
-		if err := o.workspace.CleanWorkspace(issue.Identifier,
-			o.config.BeforeRemoveHook, o.config.HookTimeoutMs); err != nil {
-			o.logger.Warn("startup terminal cleanup: failed to clean workspace",
+		branch := workspace.BranchName(issue.ID, issue.Title)
+		if !o.workspace.WorktreeExists(branch) {
+			continue
+		}
+		if o.config.BeforeRemoveHook != "" {
+			wsPath := o.workspace.WorktreePath(branch)
+			_ = workspace.RunHook("before_remove", o.config.BeforeRemoveHook, wsPath, o.config.HookTimeoutMs)
+		}
+		if err := o.workspace.RemoveWorktree(branch); err != nil {
+			o.logger.Warn("startup terminal cleanup: failed to remove worktree",
 				"issue", issue.Identifier, "error", err)
 			continue
 		}

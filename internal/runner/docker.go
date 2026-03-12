@@ -29,14 +29,15 @@ type Runner interface {
 
 // RunParams holds configuration for launching an agent container.
 type RunParams struct {
-	Image         string
-	WorkspacePath string
-	StdinPayload  model.StdinPayload
-	EnvVars       map[string]string
-	Memory        string // e.g. "2g"
-	CPUs          string // e.g. "2"
-	Network       string // e.g. "none"
-	ReadTimeoutMs int
+	Image            string
+	WorkspaceRoot    string // host path to workspace root (mounted as /workspaces)
+	ContainerWorkDir string // working directory inside container (e.g. /workspaces/issue-42-fix)
+	StdinPayload     model.StdinPayload
+	EnvVars          map[string]string
+	Memory           string // e.g. "2g"
+	CPUs             string // e.g. "2"
+	Network          string // e.g. "none"
+	ReadTimeoutMs    int
 }
 
 // RunResult holds the outcome of a completed container run.
@@ -60,8 +61,8 @@ func NewDockerRunner() *DockerRunner {
 	return &DockerRunner{DockerBin: "docker"}
 }
 
-// ContainerWorkDir is the working directory inside the agent container.
-const ContainerWorkDir = "/workspace"
+// ContainerWorkspacesRoot is the mount point for the workspace root inside the container.
+const ContainerWorkspacesRoot = "/workspaces"
 
 // unsafeContainerChars matches characters not allowed in Docker container names.
 var unsafeContainerChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
@@ -90,11 +91,11 @@ func (d *DockerRunner) IsAvailable() error {
 func (d *DockerRunner) buildDockerArgs(params RunParams, containerName string) []string {
 	args := []string{"run", "-i", "--rm", "--name", containerName}
 
-	// Volume mount: host workspace -> container working directory.
-	args = append(args, "-v", params.WorkspacePath+":"+ContainerWorkDir)
+	// Volume mount: host workspace root -> container /workspaces.
+	args = append(args, "-v", params.WorkspaceRoot+":"+ContainerWorkspacesRoot)
 
-	// Working directory inside container.
-	args = append(args, "-w", ContainerWorkDir)
+	// Working directory inside container (specific worktree).
+	args = append(args, "-w", params.ContainerWorkDir)
 
 	// Environment variables.
 	for k, v := range params.EnvVars {
@@ -122,14 +123,16 @@ func (d *DockerRunner) buildDockerArgs(params RunParams, containerName string) [
 	return args
 }
 
-// initWorkspaceOwnership runs a short-lived container to chown the workspace
-// volume so the non-root agent user can write to it.
+// initWorkspaceOwnership runs a short-lived container to chown the specific
+// worktree directory so the non-root agent user can write to it.
+// Only targets ContainerWorkDir (not the entire workspace root) to avoid
+// recursively chowning the bare clone and sibling worktrees on every launch.
 func (d *DockerRunner) initWorkspaceOwnership(params RunParams) error {
 	cmd := exec.Command(d.DockerBin, "run", "--rm",
-		"-v", params.WorkspacePath+":"+ContainerWorkDir,
+		"-v", params.WorkspaceRoot+":"+ContainerWorkspacesRoot,
 		"--entrypoint", "chown",
 		params.Image,
-		"-R", "1000:1000", ContainerWorkDir,
+		"-R", "1000:1000", params.ContainerWorkDir,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %w", string(out), err)

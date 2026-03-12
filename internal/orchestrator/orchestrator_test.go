@@ -226,7 +226,7 @@ func TestOrchestratorDispatchesOnTick(t *testing.T) {
 
 	tracker := &mockTracker{issues: issues}
 	r := newMockRunner()
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 
 	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
@@ -260,7 +260,7 @@ func TestOrchestratorRespectsMaxConcurrency(t *testing.T) {
 
 	tracker := &mockTracker{issues: issues}
 	r := &blockingMockRunner{}
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 	cfg.MaxConcurrentAgents = 2
 
@@ -289,7 +289,7 @@ func TestCompletedSetIsBookkeepingOnly(t *testing.T) {
 
 	tracker := &mockTracker{issues: issues}
 	r := newMockRunner()
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 
 	orch := New(cfg, "test prompt", tracker, r, ws, testLogger())
@@ -389,7 +389,7 @@ func TestOrchestratorRespectsPerStateConcurrency(t *testing.T) {
 
 	tracker := &mockTracker{issues: issues}
 	r := &blockingMockRunner{}
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 	cfg.MaxConcurrentAgents = 10
 	cfg.MaxConcurrentByState = map[string]int{
@@ -752,13 +752,14 @@ func TestHandleEventUpdate_RateLimits(t *testing.T) {
 func TestCleanupTerminalWorkspaces(t *testing.T) {
 	t.Parallel()
 
-	tmpDir := t.TempDir()
-	ws := workspace.NewManager(tmpDir)
+	ws := setupTestWorkspace(t)
 
-	// Create workspace directories for terminal issues.
-	_, _, err := ws.CreateForIssue("PROJ-10")
+	// Create worktrees for terminal issues.
+	branch10 := workspace.BranchName("10", "Done Issue")
+	branch11 := workspace.BranchName("11", "Cancelled Issue")
+	_, err := ws.CreateWorktree(branch10)
 	require.NoError(t, err)
-	_, _, err = ws.CreateForIssue("PROJ-11")
+	_, err = ws.CreateWorktree(branch11)
 	require.NoError(t, err)
 
 	tracker := &mockTracker{
@@ -772,11 +773,9 @@ func TestCleanupTerminalWorkspaces(t *testing.T) {
 
 	orch.CleanupTerminalWorkspaces()
 
-	// Both workspace directories should have been removed.
-	_, err = os.Stat(ws.WorkspacePath("PROJ-10"))
-	assert.True(t, os.IsNotExist(err), "PROJ-10 workspace should have been removed")
-	_, err = os.Stat(ws.WorkspacePath("PROJ-11"))
-	assert.True(t, os.IsNotExist(err), "PROJ-11 workspace should have been removed")
+	// Both worktrees should have been removed.
+	assert.False(t, ws.WorktreeExists(branch10), "branch10 worktree should have been removed")
+	assert.False(t, ws.WorktreeExists(branch11), "branch11 worktree should have been removed")
 }
 
 func TestCleanupTerminalWorkspaces_TrackerError(t *testing.T) {

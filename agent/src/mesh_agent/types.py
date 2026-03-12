@@ -27,6 +27,7 @@ class IssueState:
     description: Optional[str] = None
     priority: Optional[int] = None
     url: Optional[str] = None
+    branch_name: Optional[str] = None
     labels: list[str] = field(default_factory=list)
 
 

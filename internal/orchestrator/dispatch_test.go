@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -12,6 +13,35 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setupTestWorkspace creates a workspace manager backed by a real git repo
+// so that worktree operations work in tests.
+func setupTestWorkspace(t *testing.T) *workspace.Manager {
+	t.Helper()
+	root := t.TempDir()
+	srcDir := t.TempDir()
+	gitRun(t, srcDir, "init", "-b", "main")
+	require.NoError(t, os.WriteFile(srcDir+"/init", []byte(""), 0o644))
+	gitRun(t, srcDir, "add", ".")
+	gitRun(t, srcDir, "commit", "-m", "init")
+
+	mgr := workspace.NewManager(root)
+	mgr.RepoURL = srcDir
+	require.NoError(t, mgr.EnsureBase())
+	return mgr
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, string(out))
+}
 
 func TestSelectCandidates_FiltersDuplicates(t *testing.T) {
 	t.Parallel()
@@ -187,7 +217,7 @@ func TestDispatchIssue_PopulatesModelAndTerminalStates(t *testing.T) {
 
 	tracker := &mockTracker{}
 	r := newMockRunner()
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 	cfg.AgentModel = "claude-opus-4-6"
 	cfg.TerminalStates = []string{"done", "cancelled", "duplicate"}
@@ -196,7 +226,7 @@ func TestDispatchIssue_PopulatesModelAndTerminalStates(t *testing.T) {
 
 	ctx := context.Background()
 	issue := makeIssue("42", "PROJ-42", "Test Issue", "To Do")
-	err := orch.DispatchIssue(ctx, issue, nil)
+	err := orch.DispatchIssue(ctx, issue, nil, false)
 	require.NoError(t, err)
 
 	r.mu.Lock()
@@ -212,7 +242,7 @@ func TestDispatchIssue_InjectsProxyURLsNotSecrets(t *testing.T) {
 
 	tracker := &mockTracker{}
 	r := newMockRunner()
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 	cfg.ProxyListenPort = 9480
 	cfg.TrackerEndpoint = "https://real.atlassian.net"
@@ -225,7 +255,7 @@ func TestDispatchIssue_InjectsProxyURLsNotSecrets(t *testing.T) {
 
 	ctx := context.Background()
 	issue := makeIssue("42", "PROJ-42", "Test Issue", "To Do")
-	err := orch.DispatchIssue(ctx, issue, nil)
+	err := orch.DispatchIssue(ctx, issue, nil, false)
 	require.NoError(t, err)
 
 	r.mu.Lock()
@@ -259,7 +289,7 @@ func TestDispatchIssue_GitHubTokenProvider(t *testing.T) {
 
 	tr := &mockTracker{}
 	r := newMockRunner()
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 	cfg.TrackerKind = "github"
 	cfg.TrackerOwner = "testowner"
@@ -271,7 +301,7 @@ func TestDispatchIssue_GitHubTokenProvider(t *testing.T) {
 		WithGitHubTokenProvider(tokenProvider))
 
 	ctx := context.Background()
-	err := orch.DispatchIssue(ctx, makeIssue("1", "PROJ-1", "Test", "open"), nil)
+	err := orch.DispatchIssue(ctx, makeIssue("1", "PROJ-1", "Test", "open"), nil, false)
 	require.NoError(t, err)
 
 	r.mu.Lock()
@@ -407,7 +437,7 @@ func TestDispatchIssue_GitHubEnvVars(t *testing.T) {
 
 	tracker := &mockTracker{}
 	r := newMockRunner()
-	ws := workspace.NewManager(t.TempDir())
+	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 	cfg.TrackerKind = "github"
 	cfg.TrackerOwner = "kilupskalvis"
@@ -426,7 +456,7 @@ func TestDispatchIssue_GitHubEnvVars(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := orch.DispatchIssue(ctx, issue, nil)
+	err := orch.DispatchIssue(ctx, issue, nil, false)
 	require.NoError(t, err)
 
 	r.mu.Lock()
@@ -447,6 +477,148 @@ func TestDispatchIssue_GitHubEnvVars(t *testing.T) {
 	assert.False(t, hasJiraEndpoint, "JIRA_ENDPOINT should not be set for github tracker")
 	_, hasJiraKey := env["JIRA_PROJECT_KEY"]
 	assert.False(t, hasJiraKey, "JIRA_PROJECT_KEY should not be set for github tracker")
+}
+
+func TestDispatchIssue_ContinuationReusesWorktree(t *testing.T) {
+	t.Parallel()
+
+	r := newMockRunner()
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+
+	orch := New(cfg, "Work on {{ issue.title }}", &mockTracker{}, r, ws, testLogger())
+
+	ctx := context.Background()
+	issue := makeIssue("1", "PROJ-1", "Fix Login", "To Do")
+
+	// First dispatch creates the worktree.
+	require.NoError(t, orch.DispatchIssue(ctx, issue, nil, false))
+
+	// Grab the workspace path and dirty it.
+	branch := workspace.BranchName("1", "Fix Login")
+	wsPath := ws.WorktreePath(branch)
+	markerFile := wsPath + "/agent-work.txt"
+	require.NoError(t, os.WriteFile(markerFile, []byte("in progress"), 0o644))
+
+	// Simulate completion so the issue can be re-dispatched.
+	delete(orch.running, "1")
+	delete(orch.claimed, "1")
+
+	// Continuation dispatch (isContinuation=true) should reuse as-is.
+	attempt := 1
+	require.NoError(t, orch.DispatchIssue(ctx, issue, &attempt, true))
+
+	// Marker file should still exist — workspace was NOT reset.
+	_, err := os.Stat(markerFile)
+	assert.NoError(t, err, "continuation should reuse workspace without reset")
+}
+
+func TestDispatchIssue_ErrorRetryResetsWorktree(t *testing.T) {
+	t.Parallel()
+
+	r := newMockRunner()
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+
+	orch := New(cfg, "Work on {{ issue.title }}", &mockTracker{}, r, ws, testLogger())
+
+	ctx := context.Background()
+	issue := makeIssue("1", "PROJ-1", "Fix Login", "To Do")
+
+	// First dispatch creates the worktree.
+	require.NoError(t, orch.DispatchIssue(ctx, issue, nil, false))
+
+	// Dirty the workspace.
+	branch := workspace.BranchName("1", "Fix Login")
+	wsPath := ws.WorktreePath(branch)
+	markerFile := wsPath + "/agent-work.txt"
+	require.NoError(t, os.WriteFile(markerFile, []byte("in progress"), 0o644))
+
+	// Simulate completion.
+	delete(orch.running, "1")
+	delete(orch.claimed, "1")
+
+	// Error retry (isContinuation=false) should reset the worktree.
+	attempt := 2
+	require.NoError(t, orch.DispatchIssue(ctx, issue, &attempt, false))
+
+	// Marker file should be gone — workspace was reset to origin/main.
+	_, err := os.Stat(markerFile)
+	assert.True(t, os.IsNotExist(err), "error retry should reset workspace")
+}
+
+func TestProcessRetries_PassesContinuationFlag(t *testing.T) {
+	t.Parallel()
+
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+	cfg.MaxConcurrentAgents = 10
+
+	issue := makeIssue("1", "PROJ-1", "Fix Login", "To Do")
+	tracker := &mockTracker{issues: []model.Issue{issue}}
+	r := newMockRunner()
+
+	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+
+	ctx := context.Background()
+
+	// First dispatch to create the worktree + dirty it.
+	require.NoError(t, orch.DispatchIssue(ctx, issue, nil, false))
+	branch := workspace.BranchName("1", "Fix Login")
+	wsPath := ws.WorktreePath(branch)
+	require.NoError(t, os.WriteFile(wsPath+"/marker.txt", []byte("x"), 0o644))
+
+	// Simulate completion.
+	delete(orch.running, "1")
+	delete(orch.claimed, "1")
+
+	// Schedule a continuation retry that is already due.
+	orch.ScheduleRetry("1", "PROJ-1", 1, true, "")
+	orch.retryQueue["1"].DueAtMs = 0 // make it due now
+
+	orch.ProcessRetries(ctx)
+
+	// Continuation should NOT have reset the worktree — marker should survive.
+	_, err := os.Stat(wsPath + "/marker.txt")
+	assert.NoError(t, err, "continuation retry should preserve workspace state")
+}
+
+func TestReconcileTerminal_RemovesWorktree(t *testing.T) {
+	t.Parallel()
+
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+
+	// Create worktree for the issue.
+	branch := workspace.BranchName("1", "Issue 1")
+	_, err := ws.CreateWorktree(branch)
+	require.NoError(t, err)
+	assert.True(t, ws.WorktreeExists(branch))
+
+	tracker := &mockTracker{
+		statesByIDIssues: []model.Issue{
+			makeIssue("1", "PROJ-1", "Issue 1", "Done"),
+		},
+	}
+	orch := New(cfg, "test", tracker, newMockRunner(), ws, testLogger())
+
+	orch.running["1"] = &model.RunningEntry{
+		Identifier:  "PROJ-1",
+		Issue:       makeIssue("1", "PROJ-1", "Issue 1", "To Do"),
+		BranchName:  branch,
+		ContainerID: "mesh-test",
+		StartedAt:   time.Now(),
+		CancelFunc:  func() {},
+	}
+
+	require.NoError(t, orch.Reconcile(context.Background()))
+
+	// Running entry removed, marked completed.
+	assert.Empty(t, orch.running)
+	assert.True(t, orch.completed["1"])
+
+	// Worktree directory should be cleaned up.
+	assert.False(t, ws.WorktreeExists(branch), "worktree should be removed for terminal issue")
 }
 
 func strPtr(s string) *string { return &s }

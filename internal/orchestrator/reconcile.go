@@ -8,6 +8,7 @@ import (
 
 	"github.com/kalvis/mesh/internal/logging"
 	"github.com/kalvis/mesh/internal/model"
+	"github.com/kalvis/mesh/internal/workspace"
 )
 
 // Reconcile checks running agents against current tracker state.
@@ -223,13 +224,25 @@ func (o *Orchestrator) reconcileTrackerState(ctx context.Context) error {
 		}
 
 		if item.cleanWs {
-			if err := o.workspace.CleanWorkspace(entry.Identifier,
-				o.config.BeforeRemoveHook, o.config.HookTimeoutMs); err != nil {
-				issueLogger.Error("failed to clean workspace",
-					"error", err,
-				)
+			if entry.BranchName != "" {
+				if o.config.BeforeRemoveHook != "" {
+					wsPath := o.workspace.WorktreePath(entry.BranchName)
+					_ = workspace.RunHook("before_remove", o.config.BeforeRemoveHook, wsPath, o.config.HookTimeoutMs)
+				}
+				if err := o.workspace.RemoveWorktree(entry.BranchName); err != nil {
+					issueLogger.Error("failed to remove worktree", "error", err)
+				}
 			}
 			o.completed[item.issueID] = true
+			o.recordCompletion(model.CompletedEntry{
+				Identifier:  entry.Identifier,
+				Title:       entry.Issue.Title,
+				Status:      "cancelled",
+				TotalTokens: entry.AgentTotalTokens,
+				Duration:    time.Since(entry.StartedAt),
+				CompletedAt: time.Now(),
+			})
+			o.addLog("warn", entry.Identifier, "Cancelled by reconciliation (issue moved to terminal state)")
 		}
 
 		delete(o.running, item.issueID)

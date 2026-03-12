@@ -24,7 +24,7 @@ def _make_payload(**overrides: Any) -> StdinPayload:
             state="To Do",
         ),
         "prompt": "Fix the login bug",
-        "workspace": "/workspace",
+        "workspace": "/workspaces/issue-10042-fix-login",
         "config": AgentConfig(max_turns=3, terminal_states=["done", "cancelled"]),
         "attempt": 1,
     }

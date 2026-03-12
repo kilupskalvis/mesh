@@ -26,6 +26,7 @@ type RunningEntry struct {
 	SessionID                string     `json:"session_id"`
 	ContainerID              string     `json:"container_id"`
 	WorkspacePath            string     `json:"workspace_path"`
+	BranchName               string     `json:"branch_name"`
 	LastAgentMessage         string     `json:"last_agent_message"`
 	LastAgentEvent           string     `json:"last_agent_event"`
 	LastAgentTimestamp       *time.Time `json:"last_agent_timestamp"`
@@ -43,12 +44,13 @@ type RunningEntry struct {
 
 // RetryEntry is a scheduled retry for an issue.
 type RetryEntry struct {
-	IssueID    string  `json:"issue_id"`
-	Identifier string  `json:"identifier"`
-	Attempt    int     `json:"attempt"`
-	DueAtMs    int64   `json:"due_at_ms"`
-	Error      *string `json:"error"`
-	CancelFunc func()  `json:"-"`
+	IssueID        string  `json:"issue_id"`
+	Identifier     string  `json:"identifier"`
+	Attempt        int     `json:"attempt"`
+	DueAtMs        int64   `json:"due_at_ms"`
+	Error          *string `json:"error"`
+	IsContinuation bool    `json:"is_continuation"`
+	CancelFunc     func()  `json:"-"`
 }
 
 // AgentTotals tracks aggregate token usage and runtime across all sessions.
@@ -82,6 +84,26 @@ type AgentEvent struct {
 	TotalTokens  int64          `json:"total_tokens,omitempty"`
 	TurnsUsed    int            `json:"turns_used,omitempty"`
 	RateLimits   map[string]any `json:"rate_limits,omitempty"`
+}
+
+// CompletedEntry records the outcome of a finished agent run for the TUI history.
+type CompletedEntry struct {
+	Identifier  string        `json:"identifier"`
+	Title       string        `json:"title"`
+	Status      string        `json:"status"` // "success", "error", "cancelled"
+	Error       string        `json:"error,omitempty"`
+	TotalTokens int64         `json:"total_tokens"`
+	Duration    time.Duration `json:"duration"`
+	CompletedAt time.Time     `json:"completed_at"`
+	Attempt     int           `json:"attempt"`
+}
+
+// LogEntry is a single entry in the TUI activity feed.
+type LogEntry struct {
+	Timestamp  time.Time `json:"timestamp"`
+	Identifier string    `json:"identifier"`
+	Message    string    `json:"message"`
+	Level      string    `json:"level"` // "info", "warn", "error"
 }
 
 // StdinPayload is the JSON object written to the agent container's stdin.

@@ -140,8 +140,9 @@ func TestBuildDockerArgs_AllOptions(t *testing.T) {
 
 	d := NewDockerRunner()
 	params := RunParams{
-		Image:         "my-agent:latest",
-		WorkspacePath: "/tmp/workspace/PROJ-123",
+		Image:            "my-agent:latest",
+		WorkspaceRoot:    "/tmp/workspace",
+		ContainerWorkDir: "/workspaces/issue-123-fix",
 		EnvVars: map[string]string{
 			"API_KEY": "secret123",
 			"DEBUG":   "true",
@@ -167,12 +168,12 @@ func TestBuildDockerArgs_AllOptions(t *testing.T) {
 	assert.Contains(t, args, "-v")
 	volIdx := indexOf(args, "-v")
 	require.Greater(t, volIdx, -1)
-	assert.Equal(t, "/tmp/workspace/PROJ-123:/workspace", args[volIdx+1])
+	assert.Equal(t, "/tmp/workspace:/workspaces", args[volIdx+1])
 
 	// Check working directory
 	wIdx := indexOf(args, "-w")
 	require.Greater(t, wIdx, -1)
-	assert.Equal(t, "/workspace", args[wIdx+1])
+	assert.Equal(t, "/workspaces/issue-123-fix", args[wIdx+1])
 
 	// Check memory
 	assert.Contains(t, args, "--memory")
@@ -213,8 +214,9 @@ func TestBuildDockerArgs_MinimalOptions(t *testing.T) {
 
 	d := NewDockerRunner()
 	params := RunParams{
-		Image:         "my-agent:latest",
-		WorkspacePath: "/tmp/workspace/PROJ-456",
+		Image:            "my-agent:latest",
+		WorkspaceRoot:    "/tmp/workspace",
+		ContainerWorkDir: "/workspaces/issue-456-fix",
 	}
 
 	args := d.buildDockerArgs(params, "mesh-minimal")

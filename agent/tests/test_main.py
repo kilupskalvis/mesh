@@ -18,7 +18,7 @@ def test_parse_stdin_valid() -> None:
             "state": "To Do",
         },
         "prompt": "Fix this issue",
-        "workspace": "/workspace",
+        "workspace": "/workspaces/issue-123-fix-login",
         "config": {
             "turn_timeout_ms": 60000,
             "max_turns": 10,
@@ -67,7 +67,7 @@ def test_parse_stdin_with_model_and_terminal_states() -> None:
             "state": "To Do",
         },
         "prompt": "Fix this issue",
-        "workspace": "/workspace",
+        "workspace": "/workspaces/issue-123-fix-login",
         "config": {
             "turn_timeout_ms": 60000,
             "max_turns": 10,

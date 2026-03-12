@@ -47,7 +47,7 @@ func TestBuildAppJWT(t *testing.T) {
 	err = json.Unmarshal(payload, &claims)
 	require.NoError(t, err)
 
-	assert.Equal(t, "123456", claims["iss"])
+	assert.Equal(t, float64(123456), claims["iss"])
 	assert.Contains(t, claims, "iat")
 	assert.Contains(t, claims, "exp")
 }

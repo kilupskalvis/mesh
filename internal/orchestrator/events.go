@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/kalvis/mesh/internal/model"
@@ -63,6 +64,17 @@ func (o *Orchestrator) handleEventUpdate(msg eventUpdateMsg) {
 		entry.TurnCount++
 	}
 
+	// Log key events to the activity feed.
+	switch ev.Event {
+	case "session_started", "turn_started", "completed", "error", "notification":
+		humanized := runner.HumanizeEvent(ev)
+		level := "info"
+		if ev.Event == "error" {
+			level = "error"
+		}
+		o.addLog(level, entry.Identifier, humanized)
+	}
+
 	// Track latest rate-limit snapshot from agent events.
 	if ev.RateLimits != nil {
 		rl := &model.RateLimitSnapshot{}
@@ -122,6 +134,33 @@ func (o *Orchestrator) handleCompletion(msg completionMsg) {
 	// Bookkeeping only — does not gate dispatch.
 	o.completed[msg.IssueID] = true
 
+	// Record in completed history.
+	status := "success"
+	errMsg := ""
+	if msg.Result.Error != nil && !msg.IsContinuation {
+		status = "error"
+		errMsg = msg.Result.Error.Error()
+	}
+	o.recordCompletion(model.CompletedEntry{
+		Identifier:  msg.Identifier,
+		Title:       entry.Issue.Title,
+		Status:      status,
+		Error:       errMsg,
+		TotalTokens: msg.TotalTokens,
+		Duration:    msg.Duration,
+		CompletedAt: time.Now(),
+		Attempt:     msg.Attempt,
+	})
+
+	// Activity log.
+	logMsg := fmt.Sprintf("Completed (%s, %d tokens, %s)", status, msg.TotalTokens, msg.Duration.Truncate(time.Second))
+	logLevel := "info"
+	if status == "error" {
+		logMsg = fmt.Sprintf("Failed: %s", errMsg)
+		logLevel = "error"
+	}
+	o.addLog(logLevel, msg.Identifier, logMsg)
+
 	// Determine retry strategy.
 	if msg.Result.Error == nil || msg.IsContinuation {
 		// Normal exit: schedule a short continuation retry.
@@ -129,7 +168,6 @@ func (o *Orchestrator) handleCompletion(msg completionMsg) {
 	} else {
 		// Abnormal exit: report to Sentry and schedule exponential backoff retry.
 		o.reportError(msg.Result.Error, entry)
-		errMsg := msg.Result.Error.Error()
 		nextAttempt := msg.Attempt + 1
 		o.ScheduleRetry(msg.IssueID, msg.Identifier, nextAttempt, false, errMsg)
 	}

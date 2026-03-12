@@ -30,6 +30,7 @@ def parse_stdin() -> StdinPayload:
         description=issue_data.get("description"),
         priority=issue_data.get("priority"),
         url=issue_data.get("url"),
+        branch_name=issue_data.get("branch_name"),
         labels=issue_data.get("labels", []),
     )
 
