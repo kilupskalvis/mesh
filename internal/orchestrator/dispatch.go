@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/kalvis/mesh/internal/logging"
@@ -85,14 +86,15 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		return err
 	}
 
-	// 6. Resolve workflow system prompt.
-	systemPrompt := o.config.AgentSystemPrompt
-	if systemPrompt == "" {
-		systemPrompt = prompts.DefaultForTracker(o.config.TrackerKind)
+	// 6. Build full system prompt.
+	containerWorkDir := runner.ContainerWorkspacesRoot + "/" + branchName
+	basePrompt := o.config.AgentSystemPrompt
+	if basePrompt == "" {
+		basePrompt = prompts.DefaultSystemPrompt
 	}
+	systemPrompt := buildSystemPrompt(basePrompt, issue, containerWorkDir, branchName)
 
 	// 7. Build stdin payload.
-	containerWorkDir := runner.ContainerWorkspacesRoot + "/" + branchName
 	payload := model.StdinPayload{
 		Issue:        issue,
 		Prompt:       prompt,
@@ -129,17 +131,14 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		envVars["JIRA_ISSUE_KEY"] = issue.Identifier
 	case "github":
 		envVars["GITHUB_REPO"] = o.config.TrackerOwner + "/" + o.config.TrackerRepo
+		envVars["GITHUB_OWNER"] = o.config.TrackerOwner
 		envVars["GITHUB_ISSUE_NUMBER"] = issue.ID
 		if issue.URL != nil {
 			envVars["GITHUB_ISSUE_URL"] = *issue.URL
 		}
-	}
-
-	// Mint short-lived installation token for the container.
-	if o.githubTokenProvider != nil {
-		if ghToken, err := o.githubTokenProvider(); err == nil && ghToken != "" {
-			envVars["GITHUB_TOKEN"] = ghToken
-		}
+		ghProxyBase := fmt.Sprintf("http://host.docker.internal:%d", o.config.ProxyListenPort+1)
+		envVars["GITHUB_ENDPOINT"] = ghProxyBase + "/github"
+		envVars["GITHUB_WORKSPACE"] = wsPath // host-side path for git push handler
 	}
 
 	attemptVal := 0
@@ -275,5 +274,23 @@ func (o *Orchestrator) monitorWorker(
 		TotalTokens:    totalTokens,
 		Duration:       duration,
 	}
+}
+
+// buildSystemPrompt assembles the complete system prompt from a base prompt
+// and task context. Empty description and labels are omitted.
+func buildSystemPrompt(base string, issue model.Issue, workspace, branch string) string {
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString("\n\n---\n\n## Current Task\n")
+	fmt.Fprintf(&b, "Issue: %s — %s\n", issue.Identifier, issue.Title)
+	fmt.Fprintf(&b, "Workspace: %s\n", workspace)
+	fmt.Fprintf(&b, "Branch: %s\n", branch)
+	if issue.Description != nil && *issue.Description != "" {
+		fmt.Fprintf(&b, "Description: %s\n", *issue.Description)
+	}
+	if len(issue.Labels) > 0 {
+		fmt.Fprintf(&b, "Labels: %s\n", strings.Join(issue.Labels, ", "))
+	}
+	return b.String()
 }
 

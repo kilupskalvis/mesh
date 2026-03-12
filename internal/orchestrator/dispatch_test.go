@@ -222,7 +222,7 @@ func TestDispatchIssue_PopulatesModelAndTerminalStates(t *testing.T) {
 	cfg.AgentModel = "claude-opus-4-6"
 	cfg.TerminalStates = []string{"done", "cancelled", "duplicate"}
 
-	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
 
 	ctx := context.Background()
 	issue := makeIssue("42", "PROJ-42", "Test Issue", "To Do")
@@ -251,7 +251,7 @@ func TestDispatchIssue_InjectsProxyURLsNotSecrets(t *testing.T) {
 	cfg.SentryDSN = "https://sentry.example.com/123"
 	cfg.DockerExtraEnv = map[string]string{"CUSTOM_VAR": "custom_value"}
 
-	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
 
 	ctx := context.Background()
 	issue := makeIssue("42", "PROJ-42", "Test Issue", "To Do")
@@ -297,7 +297,7 @@ func TestDispatchIssue_GitHubTokenProvider(t *testing.T) {
 	cfg.ProxyListenPort = 9480
 
 	tokenProvider := func() (string, error) { return "minted-token", nil }
-	orch := New(cfg, "Work on {{ issue.title }}", tr, r, ws, testLogger(),
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tr, r, ws, testLogger(),
 		WithGitHubTokenProvider(tokenProvider))
 
 	ctx := context.Background()
@@ -308,7 +308,91 @@ func TestDispatchIssue_GitHubTokenProvider(t *testing.T) {
 	env := r.lastParams.EnvVars
 	r.mu.Unlock()
 
-	assert.Equal(t, "minted-token", env["GITHUB_TOKEN"])
+	_, hasGHToken := env["GITHUB_TOKEN"]
+	assert.False(t, hasGHToken, "GITHUB_TOKEN should not be injected into container")
+}
+
+func TestDispatchIssue_AssemblesFullSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	r := newMockRunner()
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+	// Leave AgentSystemPrompt empty so it falls back to DefaultSystemPrompt.
+
+	orch := New(cfg, "Work on {{ .Issue.Title }}", &mockTracker{}, r, ws, testLogger())
+
+	ctx := context.Background()
+	desc := "Login page crashes on submit"
+	issue := model.Issue{
+		ID: "42", Identifier: "PROJ-42", Title: "Fix Login",
+		State: "To Do", Description: &desc,
+		Labels: []string{"bug", "urgent"},
+	}
+	err := orch.DispatchIssue(ctx, issue, nil, false)
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	sp := r.lastParams.StdinPayload.SystemPrompt
+	r.mu.Unlock()
+
+	// Should contain the default system prompt.
+	assert.Contains(t, sp, "Mesh Agent")
+	// Should contain task context.
+	assert.Contains(t, sp, "## Current Task")
+	assert.Contains(t, sp, "PROJ-42")
+	assert.Contains(t, sp, "Fix Login")
+	assert.Contains(t, sp, "Login page crashes on submit")
+	assert.Contains(t, sp, "bug, urgent")
+}
+
+func TestDispatchIssue_OmitsEmptyDescriptionAndLabels(t *testing.T) {
+	t.Parallel()
+
+	r := newMockRunner()
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+
+	orch := New(cfg, "Work on {{ .Issue.Title }}", &mockTracker{}, r, ws, testLogger())
+
+	ctx := context.Background()
+	issue := model.Issue{
+		ID: "1", Identifier: "X-1", Title: "T", State: "To Do",
+	}
+	err := orch.DispatchIssue(ctx, issue, nil, false)
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	sp := r.lastParams.StdinPayload.SystemPrompt
+	r.mu.Unlock()
+
+	assert.NotContains(t, sp, "Description:")
+	assert.NotContains(t, sp, "Labels:")
+}
+
+func TestDispatchIssue_ConfigOverrideReplacesDefault(t *testing.T) {
+	t.Parallel()
+
+	r := newMockRunner()
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+	cfg.AgentSystemPrompt = "Custom system prompt for this workflow."
+
+	orch := New(cfg, "Work on {{ .Issue.Title }}", &mockTracker{}, r, ws, testLogger())
+
+	ctx := context.Background()
+	issue := makeIssue("1", "X-1", "T", "To Do")
+	err := orch.DispatchIssue(ctx, issue, nil, false)
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	sp := r.lastParams.StdinPayload.SystemPrompt
+	r.mu.Unlock()
+
+	assert.Contains(t, sp, "Custom system prompt for this workflow.")
+	assert.NotContains(t, sp, "Mesh Agent")
+	// Task context should still be appended.
+	assert.Contains(t, sp, "## Current Task")
 }
 
 func TestBackoffMs(t *testing.T) {
@@ -444,7 +528,7 @@ func TestDispatchIssue_GitHubEnvVars(t *testing.T) {
 	cfg.TrackerRepo = "mesh"
 	cfg.ProxyListenPort = 9480
 
-	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
 
 	issueURL := "https://github.com/kilupskalvis/mesh/issues/42"
 	issue := model.Issue{
@@ -465,8 +549,11 @@ func TestDispatchIssue_GitHubEnvVars(t *testing.T) {
 
 	// GitHub-specific env vars.
 	assert.Equal(t, "kilupskalvis/mesh", env["GITHUB_REPO"])
+	assert.Equal(t, "kilupskalvis", env["GITHUB_OWNER"])
 	assert.Equal(t, "42", env["GITHUB_ISSUE_NUMBER"])
 	assert.Equal(t, "https://github.com/kilupskalvis/mesh/issues/42", env["GITHUB_ISSUE_URL"])
+	assert.Equal(t, "http://host.docker.internal:9481/github", env["GITHUB_ENDPOINT"])
+	assert.NotEmpty(t, env["GITHUB_WORKSPACE"], "host-side workspace path for git push")
 
 	// Common env vars.
 	assert.Equal(t, "http://host.docker.internal:9480", env["ANTHROPIC_BASE_URL"])
@@ -486,7 +573,7 @@ func TestDispatchIssue_ContinuationReusesWorktree(t *testing.T) {
 	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 
-	orch := New(cfg, "Work on {{ issue.title }}", &mockTracker{}, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", &mockTracker{}, r, ws, testLogger())
 
 	ctx := context.Background()
 	issue := makeIssue("1", "PROJ-1", "Fix Login", "To Do")
@@ -520,7 +607,7 @@ func TestDispatchIssue_ErrorRetryResetsWorktree(t *testing.T) {
 	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 
-	orch := New(cfg, "Work on {{ issue.title }}", &mockTracker{}, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", &mockTracker{}, r, ws, testLogger())
 
 	ctx := context.Background()
 	issue := makeIssue("1", "PROJ-1", "Fix Login", "To Do")
@@ -558,7 +645,7 @@ func TestProcessRetries_PassesContinuationFlag(t *testing.T) {
 	tracker := &mockTracker{issues: []model.Issue{issue}}
 	r := newMockRunner()
 
-	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
 
 	ctx := context.Background()
 

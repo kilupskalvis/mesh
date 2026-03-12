@@ -229,7 +229,7 @@ func TestOrchestratorDispatchesOnTick(t *testing.T) {
 	ws := setupTestWorkspace(t)
 	cfg := testConfig()
 
-	orch := New(cfg, "Work on {{ issue.title }}", tracker, r, ws, testLogger())
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
