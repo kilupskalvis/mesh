@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -273,6 +274,90 @@ func (c *GitHubClient) FetchIssuesByLabel(label string) ([]model.Issue, error) {
 	return c.fetchIssues("open", label)
 }
 
+// FetchPRReviewComments finds the open PR for the given branch and returns all review comments.
+func (c *GitHubClient) FetchPRReviewComments(issueID string, branchName string) ([]model.ReviewComment, error) {
+	// 1. Find PR by head branch.
+	pullsURL := fmt.Sprintf("%s/repos/%s/%s/pulls?head=%s:%s&state=open",
+		c.baseURL, c.Owner, c.Repo, c.Owner, branchName)
+	body, err := c.doGet(pullsURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch PRs for branch %s: %w", branchName, err)
+	}
+
+	var pulls []ghPull
+	if err := json.Unmarshal(body, &pulls); err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubMalformedResponse, "failed to parse PRs response", err)
+	}
+	if len(pulls) == 0 {
+		return nil, nil
+	}
+
+	// Pick most recently updated PR.
+	pr := pulls[0]
+	for _, p := range pulls[1:] {
+		if p.UpdatedAt > pr.UpdatedAt {
+			pr = p
+		}
+	}
+
+	// 2. Fetch inline review comments.
+	commentsURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/comments", c.baseURL, c.Owner, c.Repo, pr.Number)
+	body, err = c.doGet(commentsURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch PR comments: %w", err)
+	}
+
+	var prComments []ghPRComment
+	if err := json.Unmarshal(body, &prComments); err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubMalformedResponse, "failed to parse PR comments", err)
+	}
+
+	// 3. Fetch top-level reviews.
+	reviewsURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews", c.baseURL, c.Owner, c.Repo, pr.Number)
+	body, err = c.doGet(reviewsURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetch PR reviews: %w", err)
+	}
+
+	var reviews []ghReview
+	if err := json.Unmarshal(body, &reviews); err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubMalformedResponse, "failed to parse PR reviews", err)
+	}
+
+	// 4. Combine into ReviewComment slice.
+	var result []model.ReviewComment
+
+	for _, rc := range prComments {
+		t, _ := time.Parse(time.RFC3339, rc.CreatedAt)
+		result = append(result, model.ReviewComment{
+			Author:    rc.User.Login,
+			Body:      rc.Body,
+			Path:      rc.Path,
+			Line:      rc.Line,
+			CreatedAt: t,
+		})
+	}
+
+	for _, r := range reviews {
+		if r.Body == "" {
+			continue // Skip reviews with no body text.
+		}
+		t, _ := time.Parse(time.RFC3339, r.SubmittedAt)
+		result = append(result, model.ReviewComment{
+			Author:    r.User.Login,
+			Body:      r.Body,
+			CreatedAt: t,
+		})
+	}
+
+	// Sort by created_at.
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	})
+
+	return result, nil
+}
+
 // patchLabels sets the full label list on an issue via PATCH.
 func (c *GitHubClient) patchLabels(issueID string, labels []string) error {
 	reqURL := fmt.Sprintf("%s/repos/%s/%s/issues/%s", c.baseURL, c.Owner, c.Repo, issueID)
@@ -394,4 +479,28 @@ type ghIssue struct {
 
 type ghLabel struct {
 	Name string `json:"name"`
+}
+
+type ghUser struct {
+	Login string `json:"login"`
+}
+
+type ghPull struct {
+	Number    int    `json:"number"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type ghPRComment struct {
+	User      ghUser `json:"user"`
+	Body      string `json:"body"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	CreatedAt string `json:"created_at"`
+}
+
+type ghReview struct {
+	User        ghUser `json:"user"`
+	Body        string `json:"body"`
+	State       string `json:"state"`
+	SubmittedAt string `json:"submitted_at"`
 }

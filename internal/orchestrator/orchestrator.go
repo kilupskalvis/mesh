@@ -23,6 +23,7 @@ type TrackerClient interface {
 	SetLabels(issueID string, labels []string) error
 	PostComment(issueID string, body string) error
 	FetchIssuesByLabel(label string) ([]model.Issue, error)
+	FetchPRReviewComments(issueID string, branchName string) ([]model.ReviewComment, error)
 }
 
 // ErrorReporter is an interface for reporting errors to an external service (e.g. Sentry).
@@ -302,6 +303,22 @@ func (o *Orchestrator) tick(ctx context.Context) {
 	if err != nil {
 		o.logger.Error("failed to fetch candidate issues", "error", err)
 		return
+	}
+
+	// 4b. Fetch revision candidates (mesh-revision label).
+	revisionIssues, revErr := o.tracker.FetchIssuesByLabel("mesh-revision")
+	if revErr != nil {
+		o.logger.Warn("failed to fetch revision candidates", "error", revErr)
+	} else if len(revisionIssues) > 0 {
+		seen := make(map[string]bool, len(issues))
+		for _, issue := range issues {
+			seen[issue.ID] = true
+		}
+		for _, issue := range revisionIssues {
+			if !seen[issue.ID] {
+				issues = append(issues, issue)
+			}
+		}
 	}
 
 	// 5. Filter and sort.

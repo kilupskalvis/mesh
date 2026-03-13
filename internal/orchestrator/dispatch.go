@@ -38,18 +38,39 @@ set the label to ` + "`mesh-review`" + ` and stop.`
 // isContinuation indicates whether this is a continuation retry (reuse workspace
 // as-is) vs an error retry (reset worktree to origin/main).
 func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, attempt *int, isContinuation bool) error {
-	// 1. Label swap: mesh → mesh-working.
+	originLabel := originatingDispatchLabel(issue.Labels)
+	isRevision := originLabel == "mesh-revision"
+
+	// For revision dispatches, force continuation mode (reuse worktree as-is).
+	if isRevision {
+		isContinuation = true
+	}
+
+	// 1. Label swap: mesh/mesh-revision → mesh-working.
 	if err := o.tracker.SetLabels(issue.ID, []string{"mesh-working"}); err != nil {
 		return fmt.Errorf("label swap to mesh-working: %w", err)
 	}
 
-	// 2. Prepare workspace and launch container.
-	err := o.launchContainer(ctx, issue, attempt, isContinuation, 0, 0)
+	// 2. Fetch review comments for revision dispatches.
+	var revisionComments []model.ReviewComment
+	if isRevision {
+		branchName := workspace.BranchName(issue.ID, issue.Title)
+		comments, err := o.tracker.FetchPRReviewComments(issue.ID, branchName)
+		if err != nil {
+			o.logger.Warn("failed to fetch PR review comments, proceeding without",
+				"issue", issue.Identifier, "error", err)
+		} else {
+			revisionComments = comments
+		}
+	}
+
+	// 3. Prepare workspace and launch container.
+	err := o.launchContainer(ctx, issue, attempt, isContinuation, 0, 0, revisionComments)
 	if err != nil {
 		// Rollback label on failure.
-		if rbErr := o.tracker.SetLabels(issue.ID, []string{"mesh"}); rbErr != nil {
-			o.logger.Error("failed to rollback label to mesh",
-				"issue", issue.Identifier, "error", rbErr)
+		if rbErr := o.tracker.SetLabels(issue.ID, []string{originLabel}); rbErr != nil {
+			o.logger.Error("failed to rollback label",
+				"issue", issue.Identifier, "label", originLabel, "error", rbErr)
 		}
 		return err
 	}
@@ -65,11 +86,11 @@ func (o *Orchestrator) DispatchRetry(ctx context.Context, retry *model.RetryEntr
 		a := retry.Attempt
 		attempt = &a
 	}
-	return o.launchContainer(ctx, issue, attempt, retry.IsContinuation, retry.ErrorRetries, retry.ContinuationCount)
+	return o.launchContainer(ctx, issue, attempt, retry.IsContinuation, retry.ErrorRetries, retry.ContinuationCount, nil)
 }
 
 // launchContainer is the shared implementation for DispatchIssue and DispatchRetry.
-func (o *Orchestrator) launchContainer(ctx context.Context, issue model.Issue, attempt *int, isContinuation bool, errorRetries, continuationCount int) error {
+func (o *Orchestrator) launchContainer(ctx context.Context, issue model.Issue, attempt *int, isContinuation bool, errorRetries, continuationCount int, revisionComments []model.ReviewComment) error {
 	// 1. Generate branch name.
 	branchName := workspace.BranchName(issue.ID, issue.Title)
 
@@ -135,6 +156,9 @@ func (o *Orchestrator) launchContainer(ctx context.Context, issue model.Issue, a
 	systemPrompt := buildSystemPrompt(basePrompt, issue, containerWorkDir, branchName)
 	if isContinuation {
 		systemPrompt += continuationPrompt
+	}
+	if len(revisionComments) > 0 {
+		systemPrompt += buildRevisionPrompt(revisionComments)
 	}
 
 	// 6. Build stdin payload.
@@ -332,4 +356,67 @@ func buildSystemPrompt(base string, issue model.Issue, workspace, branch string)
 		fmt.Fprintf(&b, "Labels: %s\n", strings.Join(issue.Labels, ", "))
 	}
 	return b.String()
+}
+
+// originatingDispatchLabel returns the dispatch label from the issue's labels.
+// Returns "mesh-revision" if present, otherwise "mesh".
+func originatingDispatchLabel(labels []string) string {
+	for _, l := range labels {
+		if strings.ToLower(l) == "mesh-revision" {
+			return "mesh-revision"
+		}
+	}
+	return "mesh"
+}
+
+// revisionPromptPrefix is the static header for revision dispatches.
+const revisionPromptPrefix = `
+
+## Revision
+
+This is a revision dispatch. A previous agent session created a PR that
+has been reviewed by a human. Your task is to address the review feedback
+below.
+
+The branch already contains the previous work. Do NOT start over.
+
+### Review Comments
+
+`
+
+// revisionPromptSuffix is appended after the review comments.
+const revisionPromptSuffix = `
+### Instructions
+
+1. Read the review comments carefully.
+2. Address each comment — fix the code, respond to questions.
+3. Commit your changes with messages that reference the review feedback.
+4. Push to the same branch (the existing PR will update automatically).
+5. Post a comment on the PR summarizing what you addressed.
+6. Set the label to mesh-review.
+`
+
+// formatReviewComments formats review comments as a Markdown list.
+func formatReviewComments(comments []model.ReviewComment) string {
+	if len(comments) == 0 {
+		return "_No review comments found._\n"
+	}
+	var b strings.Builder
+	for _, c := range comments {
+		if c.Path != "" {
+			fmt.Fprintf(&b, "- **@%s** on `%s` line %d:\n", c.Author, c.Path, c.Line)
+		} else {
+			fmt.Fprintf(&b, "- **@%s** (general):\n", c.Author)
+		}
+		for _, line := range strings.Split(c.Body, "\n") {
+			fmt.Fprintf(&b, "  > %s\n", line)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// buildRevisionPrompt assembles the full revision prompt section from review comments.
+func buildRevisionPrompt(comments []model.ReviewComment) string {
+	return revisionPromptPrefix + formatReviewComments(comments) + revisionPromptSuffix
 }

@@ -71,8 +71,8 @@ func (o *Orchestrator) isEligible(issue model.Issue) bool {
 		return false
 	}
 
-	// Must have the "mesh" label (source of truth from tracker).
-	if !hasMeshLabel(issue.Labels) {
+	// Must have a dispatchable label ("mesh" or "mesh-revision").
+	if !hasDispatchLabel(issue.Labels) {
 		return false
 	}
 
@@ -94,10 +94,11 @@ func (o *Orchestrator) isEligible(issue model.Issue) bool {
 	return true
 }
 
-// hasMeshLabel checks if the issue has the "mesh" label (exactly "mesh", not "mesh-working" etc).
-func hasMeshLabel(labels []string) bool {
+// hasDispatchLabel checks if the issue has a dispatchable label ("mesh" or "mesh-revision").
+func hasDispatchLabel(labels []string) bool {
 	for _, l := range labels {
-		if strings.ToLower(l) == "mesh" {
+		lower := strings.ToLower(l)
+		if lower == "mesh" || lower == "mesh-revision" {
 			return true
 		}
 	}

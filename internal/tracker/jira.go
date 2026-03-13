@@ -97,6 +97,11 @@ func (c *JiraClient) FetchIssuesByLabel(label string) ([]model.Issue, error) {
 	return nil, fmt.Errorf("FetchIssuesByLabel not implemented for Jira tracker")
 }
 
+// FetchPRReviewComments is not applicable to Jira — returns nil.
+func (c *JiraClient) FetchPRReviewComments(issueID string, branchName string) ([]model.ReviewComment, error) {
+	return nil, nil
+}
+
 func (c *JiraClient) searchAllPages(jql string) ([]model.Issue, error) {
 	var allIssues []model.Issue
 	startAt := 0

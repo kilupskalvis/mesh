@@ -132,3 +132,12 @@ type StdinPayloadConfig struct {
 	Sandbox        string   `json:"sandbox,omitempty"`
 	SandboxPolicy  string   `json:"sandbox_policy,omitempty"`
 }
+
+// ReviewComment represents a single review comment from a pull request.
+type ReviewComment struct {
+	Author    string    `json:"author"`
+	Body      string    `json:"body"`
+	Path      string    `json:"path"` // file path; empty for PR-level comments
+	Line      int       `json:"line"` // 0 for PR-level comments
+	CreatedAt time.Time `json:"created_at"`
+}

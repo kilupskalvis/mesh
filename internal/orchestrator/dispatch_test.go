@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"testing"
@@ -41,6 +42,34 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, string(out))
+}
+
+func TestSelectCandidates_AcceptsMeshRevisionLabel(t *testing.T) {
+	t.Parallel()
+
+	tracker := &mockTracker{}
+	r := newMockRunner()
+	ws := workspace.NewManager(os.TempDir() + "/mesh_test_revision_eligible")
+	cfg := testConfig()
+
+	orch := New(cfg, "test prompt", tracker, r, ws, testLogger())
+
+	issues := []model.Issue{
+		{ID: "1", Identifier: "PROJ-1", Title: "Mesh Label", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Revision Label", State: "To Do", Labels: []string{"mesh-revision"}},
+		{ID: "3", Identifier: "PROJ-3", Title: "Working Label", State: "To Do", Labels: []string{"mesh-working"}},
+	}
+
+	candidates := orch.SelectCandidates(issues)
+
+	assert.Len(t, candidates, 2)
+	ids := make([]string, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.ID
+	}
+	assert.Contains(t, ids, "1")
+	assert.Contains(t, ids, "2")
+	assert.NotContains(t, ids, "3")
 }
 
 func TestSelectCandidates_FiltersDuplicates(t *testing.T) {
@@ -710,4 +739,81 @@ func TestReconcileTerminal_RemovesWorktree(t *testing.T) {
 
 	// Worktree directory should be cleaned up.
 	assert.False(t, ws.WorktreeExists(branch), "worktree should be removed for terminal issue")
+}
+
+func TestDispatchIssue_RevisionRollbacksToMeshRevision(t *testing.T) {
+	t.Parallel()
+
+	tracker := &mockTracker{}
+	r := &mockRunner{err: fmt.Errorf("container launch failed")}
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+	cfg.TrackerKind = "github"
+	cfg.TrackerOwner = "testowner"
+	cfg.TrackerRepo = "testrepo"
+	cfg.ProxyListenPort = 9480
+
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
+
+	ctx := context.Background()
+	issue := model.Issue{
+		ID: "1", Identifier: "PROJ-1", Title: "Fix", State: "open",
+		Labels: []string{"mesh-revision"},
+	}
+
+	err := orch.DispatchIssue(ctx, issue, nil, false)
+	require.Error(t, err)
+
+	// Should roll back to mesh-revision, not mesh.
+	tracker.mu.Lock()
+	labels := tracker.labels["1"]
+	tracker.mu.Unlock()
+	assert.Equal(t, []string{"mesh-revision"}, labels)
+}
+
+func TestDispatchIssue_RevisionIncludesReviewComments(t *testing.T) {
+	t.Parallel()
+
+	tracker := &mockTracker{
+		reviewComments: []model.ReviewComment{
+			{Author: "alice", Body: "Fix the null check", Path: "main.go", Line: 42},
+			{Author: "bob", Body: "Looks good overall"},
+		},
+	}
+	r := newMockRunner()
+	ws := setupTestWorkspace(t)
+	cfg := testConfig()
+	cfg.TrackerKind = "github"
+	cfg.TrackerOwner = "testowner"
+	cfg.TrackerRepo = "testrepo"
+	cfg.ProxyListenPort = 9480
+
+	orch := New(cfg, "Work on {{ .Issue.Title }}", tracker, r, ws, testLogger())
+
+	ctx := context.Background()
+	issue := model.Issue{
+		ID: "1", Identifier: "PROJ-1", Title: "Fix Login", State: "open",
+		Labels: []string{"mesh-revision"},
+	}
+
+	// Pre-create the worktree (simulates prior dispatch).
+	branch := workspace.BranchName("1", "Fix Login")
+	_, err := ws.CreateWorktree(branch)
+	require.NoError(t, err)
+
+	err = orch.DispatchIssue(ctx, issue, nil, false)
+	require.NoError(t, err)
+
+	r.mu.Lock()
+	sp := r.lastParams.StdinPayload.SystemPrompt
+	isCont := r.lastParams.StdinPayload.IsContinuation
+	r.mu.Unlock()
+
+	// Should contain revision prompt with review comments.
+	assert.Contains(t, sp, "## Revision")
+	assert.Contains(t, sp, "**@alice** on `main.go` line 42")
+	assert.Contains(t, sp, "Fix the null check")
+	assert.Contains(t, sp, "**@bob** (general)")
+	assert.Contains(t, sp, "Looks good overall")
+	assert.True(t, isCont, "revision should be a continuation")
 }

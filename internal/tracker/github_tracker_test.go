@@ -246,3 +246,57 @@ func TestGitHubClient_NotFoundError(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "github_api_not_found", meshErr.Kind)
 }
+
+func TestGitHubClient_FetchPRReviewComments(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/testowner/testrepo/pulls" && r.URL.Query().Get("head") == "testowner:fix-42":
+			json.NewEncoder(w).Encode([]ghPull{{Number: 10, UpdatedAt: "2026-03-13T00:00:00Z"}})
+
+		case r.URL.Path == "/repos/testowner/testrepo/pulls/10/comments":
+			json.NewEncoder(w).Encode([]ghPRComment{
+				{User: ghUser{Login: "alice"}, Body: "Fix this null check", Path: "main.go", Line: 42, CreatedAt: "2026-03-13T01:00:00Z"},
+			})
+
+		case r.URL.Path == "/repos/testowner/testrepo/pulls/10/reviews":
+			json.NewEncoder(w).Encode([]ghReview{
+				{User: ghUser{Login: "bob"}, Body: "Overall looks good, minor nits", State: "CHANGES_REQUESTED", SubmittedAt: "2026-03-13T02:00:00Z"},
+			})
+
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+
+	c := newTestGitHubClient(t, server.URL)
+	comments, err := c.FetchPRReviewComments("42", "fix-42")
+	require.NoError(t, err)
+	require.Len(t, comments, 2)
+
+	// Sorted by created_at — inline comment first.
+	assert.Equal(t, "alice", comments[0].Author)
+	assert.Equal(t, "Fix this null check", comments[0].Body)
+	assert.Equal(t, "main.go", comments[0].Path)
+	assert.Equal(t, 42, comments[0].Line)
+
+	assert.Equal(t, "bob", comments[1].Author)
+	assert.Equal(t, "Overall looks good, minor nits", comments[1].Body)
+	assert.Equal(t, "", comments[1].Path) // review-level, no file
+}
+
+func TestGitHubClient_FetchPRReviewComments_NoPR(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]ghPull{}) // empty
+	}))
+	defer server.Close()
+
+	c := newTestGitHubClient(t, server.URL)
+	comments, err := c.FetchPRReviewComments("42", "fix-42")
+	require.NoError(t, err)
+	assert.Empty(t, comments)
+}

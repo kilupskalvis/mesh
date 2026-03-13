@@ -22,19 +22,21 @@ import (
 // --- Mock types ---
 
 type mockTracker struct {
-	mu               sync.Mutex
-	issues           []model.Issue
-	err              error
-	fetchCount       int
-	statesByIDIssues []model.Issue
-	statesByIDErr    error
-	labels           map[string][]string // issueID -> labels
-	labelsErr        error
-	setLabelsErr     error
-	commentErr       error
-	byLabelIssues    []model.Issue
-	byLabelErr       error
-	comments         []struct{ IssueID, Body string }
+	mu                sync.Mutex
+	issues            []model.Issue
+	err               error
+	fetchCount        int
+	statesByIDIssues  []model.Issue
+	statesByIDErr     error
+	labels            map[string][]string // issueID -> labels
+	labelsErr         error
+	setLabelsErr      error
+	commentErr        error
+	byLabelIssues     []model.Issue
+	byLabelErr        error
+	comments          []struct{ IssueID, Body string }
+	reviewComments    []model.ReviewComment
+	reviewCommentsErr error
 }
 
 func (m *mockTracker) FetchCandidateIssues(states []string) ([]model.Issue, error) {
@@ -106,6 +108,12 @@ func (m *mockTracker) FetchIssuesByLabel(label string) ([]model.Issue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.byLabelIssues, m.byLabelErr
+}
+
+func (m *mockTracker) FetchPRReviewComments(issueID string, branchName string) ([]model.ReviewComment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reviewComments, m.reviewCommentsErr
 }
 
 type mockRunner struct {
@@ -950,6 +958,16 @@ func TestReloadConfig(t *testing.T) {
 	assert.Equal(t, 20, orch.config.MaxConcurrentAgents)
 	assert.Equal(t, 500, orch.config.PollIntervalMs)
 	assert.Equal(t, "new prompt", orch.promptTmpl)
+}
+
+func TestFindMeshLabel_MeshRevision(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "mesh-revision", findMeshLabel([]string{"mesh-revision"}))
+	assert.Equal(t, "mesh-revision", findMeshLabel([]string{"mesh-revision", "mesh"}))
+	assert.Equal(t, "mesh-working", findMeshLabel([]string{"mesh-revision", "mesh-working"}))
+	assert.Equal(t, "mesh-review", findMeshLabel([]string{"mesh-revision", "mesh-review"}))
+	assert.Equal(t, "mesh-failed", findMeshLabel([]string{"mesh-revision", "mesh-failed"}))
 }
 
 func TestStallDetectionSkippedWhenDisabled(t *testing.T) {

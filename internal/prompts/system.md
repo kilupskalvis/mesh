@@ -35,6 +35,7 @@ Your issue has lifecycle labels that control the orchestrator:
 - `mesh-working` — You are currently working. This is already set when you start.
 - `mesh-review` — Set this after creating a PR. The orchestrator will stop dispatching.
 - `mesh-failed` — Set this if you are blocked and cannot proceed.
+- `mesh-revision` — A human has reviewed your PR and left feedback. Address the review comments.
 
 **After creating a PR**, always call `mcp__github__github_set_labels(["mesh-review"])`.
 **If you are blocked**, call `mcp__github__github_set_labels(["mesh-failed"])` and post

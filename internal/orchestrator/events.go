@@ -223,6 +223,32 @@ func (o *Orchestrator) handleCompletion(msg completionMsg) {
 			o.addLog("error", msg.Identifier, fmt.Sprintf("Error retry %d/%d: %s", errorRetries, o.config.MaxErrorRetries, errMsg))
 		}
 
+	case "mesh-revision":
+		// Agent exited during revision without transitioning labels — same retry logic as mesh-working.
+		if msg.Result.ExitCode == 0 {
+			continuationCount++
+			if continuationCount >= o.config.MaxContinuations {
+				o.handleMaxRetriesExceeded(msg, issueSnapshot, errorRetries, continuationCount, "max continuations exceeded (revision)")
+				return
+			}
+			o.ScheduleRetry(msg.IssueID, msg.Identifier, 1, true, "", errorRetries, continuationCount, issueSnapshot)
+			o.addLog("info", msg.Identifier, fmt.Sprintf("Revision continuation %d/%d", continuationCount, o.config.MaxContinuations))
+		} else {
+			errorRetries++
+			errMsg := ""
+			if msg.Result.Error != nil {
+				errMsg = msg.Result.Error.Error()
+				o.reportError(msg.Result.Error, entry)
+			}
+			if errorRetries >= o.config.MaxErrorRetries {
+				o.handleMaxRetriesExceeded(msg, issueSnapshot, errorRetries, continuationCount, errMsg)
+				return
+			}
+			nextAttempt := msg.Attempt + 1
+			o.ScheduleRetry(msg.IssueID, msg.Identifier, nextAttempt, false, errMsg, errorRetries, continuationCount, issueSnapshot)
+			o.addLog("error", msg.Identifier, fmt.Sprintf("Revision error retry %d/%d: %s", errorRetries, o.config.MaxErrorRetries, errMsg))
+		}
+
 	case "mesh":
 		// Race condition or external relabel — log warning, do nothing.
 		o.logger.Warn("handleCompletion: issue has mesh label (unexpected during completion)",
@@ -283,8 +309,12 @@ func findMeshLabel(labels []string) string {
 		case "mesh-failed":
 			found = "mesh-failed"
 		case "mesh-working":
-			if found == "" || found == "mesh" {
+			if found == "" || found == "mesh" || found == "mesh-revision" {
 				found = "mesh-working"
+			}
+		case "mesh-revision":
+			if found == "" || found == "mesh" {
+				found = "mesh-revision"
 			}
 		case "mesh":
 			if found == "" {
