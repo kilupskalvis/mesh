@@ -15,22 +15,38 @@ Watches your issue tracker, dispatches AI agents to write code, and delivers pul
 </p>
 
 <p align="center">
-<a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/kalvis/mesh" alt="Go Version"></a>
-<a href="LICENSE"><img src="https://img.shields.io/github/license/kalvis/mesh" alt="License"></a>
+<a href="https://go.dev/"><img src="https://img.shields.io/github/go-mod/go-version/kilupskalvis/mesh" alt="Go Version"></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/kilupskalvis/mesh" alt="License"></a>
 </p>
 
 ## How It Works
 
 Mesh connects to your issue tracker (GitHub Issues or Jira), picks up issues labeled `mesh`, and dispatches Docker containers running an AI coding agent to implement them. Each agent gets its own git worktree, writes code, runs tests, creates a pull request, and signals completion — all autonomously.
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────────────┐
-│ Issue Tracker │────▶│  Orchestrator │────▶│  Docker Container    │
-│ (GitHub/Jira) │◀────│  (Go binary)  │◀────│  (Python + Claude)   │
-│              │     │              │     │                      │
-│  mesh ──────────▶ mesh-working ──────▶ mesh-review            │
-│  (queued)    │     │  (running)   │     │  (PR created)        │
-└──────────────┘     └──────────────┘     └──────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Tracker["Issue Tracker"]
+        A["mesh\n(queued)"]
+    end
+
+    subgraph Orchestrator["Orchestrator (Go)"]
+        B["mesh-working\n(running)"]
+    end
+
+    subgraph Container["Docker Container"]
+        C["Python Agent\n+ Claude"]
+    end
+
+    subgraph Result["Outcome"]
+        D["mesh-review\n(PR created)"]
+        E["mesh-failed\n(blocked)"]
+    end
+
+    A -->|poll & dispatch| B
+    B -->|stdin + worktree| C
+    C -->|stdout events| B
+    C -->|push + create PR| D
+    C -->|blocked| E
 ```
 
 **Lifecycle labels** are the source of truth:
@@ -41,6 +57,108 @@ Mesh connects to your issue tracker (GitHub Issues or Jira), picks up issues lab
 | `mesh-working` | Agent is actively working |
 | `mesh-review` | PR created, ready for human review |
 | `mesh-failed` | Agent gave up (blocked, max retries) |
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Host
+        CLI["bin/mesh"]
+        Config["WORKFLOW.md"]
+        Orch["Orchestrator\n(poll loop)"]
+        WS["Workspace Manager\n(git worktrees)"]
+        Proxy["Credential Proxy\n(nginx + Go handler)"]
+        TUI["Terminal Dashboard"]
+        Server["HTTP API\n(optional)"]
+        Bare[".base bare clone"]
+
+        CLI --> Config
+        CLI --> Orch
+        Orch --> WS
+        Orch --> Proxy
+        Orch --> TUI
+        Orch --> Server
+        WS --> Bare
+    end
+
+    subgraph Docker["Docker Containers (one per issue)"]
+        Agent["Python Agent"]
+        SDK["Claude Agent SDK"]
+        Tools["MCP Tools\n(github, jira)"]
+
+        Agent --> SDK
+        Agent --> Tools
+    end
+
+    subgraph External
+        Tracker["GitHub Issues / Jira"]
+        Claude["Claude API"]
+    end
+
+    Orch -->|"dispatch (stdin JSON)"| Agent
+    Agent -->|"events (stdout JSON lines)"| Orch
+    Tools -->|"API calls via proxy"| Proxy
+    Proxy -->|"inject tokens"| Tracker
+    SDK --> Claude
+    Orch -->|"labels, comments"| Tracker
+    WS -->|"bind mount /workspaces"| Docker
+```
+
+### Project Structure
+
+```
+mesh/
+├── cmd/mesh/              # CLI entry point
+├── internal/
+│   ├── config/            # WORKFLOW.md parser, env resolution, hot-reload
+│   ├── model/             # Shared types (Issue, RunningEntry, AgentEvent)
+│   ├── orchestrator/      # Poll loop, dispatch, reconciliation, retries
+│   ├── runner/            # Docker container lifecycle, event streaming
+│   ├── workspace/         # Git worktree management (create, reset, remove)
+│   ├── tracker/           # GitHub and Jira API clients
+│   ├── proxy/             # Credential proxy (nginx) + GitHub API handler
+│   ├── tui/               # Terminal dashboard (Bubble Tea)
+│   ├── server/            # Optional HTTP API
+│   ├── template/          # Prompt template rendering
+│   ├── prompts/           # Agent system prompt
+│   ├── logging/           # Structured logging
+│   └── sentry/            # Error reporting
+├── agent/                 # Python agent (runs in Docker)
+│   ├── src/mesh_agent/
+│   │   ├── main.py        # Entry point, stdin parsing
+│   │   ├── session.py     # Claude SDK client session
+│   │   ├── sdk_config.py  # Tool and model configuration
+│   │   ├── events.py      # JSON-line event emitter
+│   │   └── tools/         # MCP tools (GitHub, Jira)
+│   ├── Dockerfile
+│   └── pyproject.toml
+└── tests/integration/     # End-to-end tests
+```
+
+### Orchestrator
+
+The orchestrator runs a single-goroutine poll loop — no mutexes needed. Each tick:
+
+1. **Reconcile** — Detect stalls, turn timeouts, terminal states, orphans, external label changes
+2. **Process retries** — Execute retries with exponential backoff + jitter
+3. **Fetch candidates** — Query tracker for `mesh`-labeled issues
+4. **Filter and sort** — Check eligibility (not already running, not blocked, slot available)
+5. **Dispatch** — Create worktree, start Docker container, label `mesh-working`
+
+### Agent
+
+The Python agent runs inside a Docker container. It receives context via stdin (JSON) and streams events back via stdout (JSON lines). It uses the Claude Agent SDK with MCP tools for all tracker and git operations.
+
+### Workspace Isolation
+
+Each issue gets a git worktree branched from `origin/main`. The orchestrator maintains a shared bare clone at `~/.mesh/workspaces/.base` and creates lightweight worktrees for each agent. Worktree `.git` files are rewritten to use relative paths so they work inside Docker containers where the mount point differs from the host.
+
+### Credential Proxy
+
+The agent container has no credentials. All authenticated operations (GitHub API calls, git push) go through a host-side proxy:
+
+- **GitHub API proxy** — Go HTTP handler at `host.docker.internal:9481` that injects GitHub App tokens
+- **Credential proxy** — nginx at `host.docker.internal:9480` for Jira token injection
 
 ## Quick Start
 
@@ -54,7 +172,7 @@ Mesh connects to your issue tracker (GitHub Issues or Jira), picks up issues lab
 ### 2. Install
 
 ```bash
-git clone https://github.com/kalvis/mesh.git
+git clone https://github.com/kilupskalvis/mesh.git
 cd mesh
 make build          # builds bin/mesh
 make docker-agent   # builds mesh-agent:latest Docker image
@@ -270,62 +388,6 @@ Available template variables:
 | `.Issue.Labels` | []string | Current labels |
 | `.Issue.URL` | *string | Link to issue |
 | `.Issue.BranchName` | *string | Suggested branch name |
-
-## Architecture
-
-```
-mesh/
-├── cmd/mesh/              # CLI entry point
-├── internal/
-│   ├── config/            # WORKFLOW.md parser, env resolution, hot-reload
-│   ├── model/             # Shared types (Issue, RunningEntry, AgentEvent)
-│   ├── orchestrator/      # Poll loop, dispatch, reconciliation, retries
-│   ├── runner/            # Docker container lifecycle, event streaming
-│   ├── workspace/         # Git worktree management (create, reset, remove)
-│   ├── tracker/           # GitHub and Jira API clients
-│   ├── proxy/             # Credential proxy (nginx) + GitHub API handler
-│   ├── tui/               # Terminal dashboard (Bubble Tea)
-│   ├── server/            # Optional HTTP API
-│   ├── template/          # Prompt template rendering
-│   ├── prompts/           # Agent system prompt
-│   ├── logging/           # Structured logging
-│   └── sentry/            # Error reporting
-├── agent/                 # Python agent (runs in Docker)
-│   ├── src/mesh_agent/
-│   │   ├── main.py        # Entry point, stdin parsing
-│   │   ├── session.py     # Claude SDK client session
-│   │   ├── sdk_config.py  # Tool and model configuration
-│   │   ├── events.py      # JSON-line event emitter
-│   │   └── tools/         # MCP tools (GitHub, Jira)
-│   ├── Dockerfile
-│   └── pyproject.toml
-└── tests/integration/     # End-to-end tests
-```
-
-### Orchestrator
-
-The orchestrator runs a single-goroutine poll loop — no mutexes needed. Each tick:
-
-1. **Reconcile** — Detect stalls, turn timeouts, terminal states, orphans, external label changes
-2. **Process retries** — Execute retries with exponential backoff + jitter
-3. **Fetch candidates** — Query tracker for `mesh`-labeled issues
-4. **Filter and sort** — Check eligibility (not already running, not blocked, slot available)
-5. **Dispatch** — Create worktree, start Docker container, label `mesh-working`
-
-### Agent
-
-The Python agent runs inside a Docker container. It receives context via stdin (JSON) and streams events back via stdout (JSON lines). It uses the Claude Agent SDK with MCP tools for all tracker and git operations.
-
-### Workspace Isolation
-
-Each issue gets a git worktree branched from `origin/main`. The orchestrator maintains a shared bare clone at `~/.mesh/workspaces/.base` and creates lightweight worktrees for each agent. Worktree `.git` files are rewritten to use relative paths so they work inside Docker containers where the mount point differs from the host.
-
-### Credential Proxy
-
-The agent container has no credentials. All authenticated operations (GitHub API calls, git push) go through a host-side proxy:
-
-- **GitHub API proxy** — Go HTTP handler at `host.docker.internal:9481` that injects GitHub App tokens
-- **Credential proxy** — nginx at `host.docker.internal:9480` for Jira token injection
 
 ## Retry and Recovery
 
