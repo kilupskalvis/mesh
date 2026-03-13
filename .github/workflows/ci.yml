@@ -54,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd agent
-          uv sync
+          uv sync --all-extras
 
       - name: Lint
         run: |
