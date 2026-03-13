@@ -77,6 +77,26 @@ func (c *JiraClient) FetchIssueStatesByIDs(issueIDs []string) ([]model.Issue, er
 	return c.searchAllPages(jql)
 }
 
+// GetLabels is not yet implemented for Jira (deferred to follow-up spec).
+func (c *JiraClient) GetLabels(issueID string) ([]string, error) {
+	return nil, fmt.Errorf("GetLabels not implemented for Jira tracker")
+}
+
+// SetLabels is not yet implemented for Jira (deferred to follow-up spec).
+func (c *JiraClient) SetLabels(issueID string, labels []string) error {
+	return fmt.Errorf("SetLabels not implemented for Jira tracker")
+}
+
+// PostComment is not yet implemented for Jira (deferred to follow-up spec).
+func (c *JiraClient) PostComment(issueID string, body string) error {
+	return fmt.Errorf("PostComment not implemented for Jira tracker")
+}
+
+// FetchIssuesByLabel is not yet implemented for Jira (deferred to follow-up spec).
+func (c *JiraClient) FetchIssuesByLabel(label string) ([]model.Issue, error) {
+	return nil, fmt.Errorf("FetchIssuesByLabel not implemented for Jira tracker")
+}
+
 func (c *JiraClient) searchAllPages(jql string) ([]model.Issue, error) {
 	var allIssues []model.Issue
 	startAt := 0

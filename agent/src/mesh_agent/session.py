@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from claude_agent_sdk import AssistantMessage, ClaudeSDKClient, ResultMessage, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeSDKClient,
+    ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 
 from .events import EventEmitter
 from .sdk_config import build_sdk_options
@@ -39,8 +46,18 @@ async def run_session(payload: StdinPayload, emitter: EventEmitter) -> SessionRe
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         last_message = block.text
+                        logger.info("[turn %d] text: %s", turn, block.text[:300])
+                    elif isinstance(block, ToolUseBlock):
+                        input_str = str(block.input)[:200] if block.input else ""
+                        logger.info("[turn %d] tool_use: %s(%s)", turn, block.name, input_str)
+                    elif isinstance(block, ToolResultBlock):
+                        content_str = str(block.content)[:200] if block.content else ""
+                        logger.info("[turn %d] tool_result: %s", turn, content_str)
+                    else:
+                        logger.info("[turn %d] block: %s", turn, type(block).__name__)
             elif isinstance(message, ResultMessage):
                 result = message
+                logger.info("result: is_error=%s session=%s", result.is_error, result.session_id)
 
         # Guard: receive_response() completed without ResultMessage.
         if result is None:

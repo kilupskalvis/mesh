@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/kalvis/mesh/internal/model"
@@ -70,17 +71,15 @@ func (o *Orchestrator) isEligible(issue model.Issue) bool {
 		return false
 	}
 
+	// Must have the "mesh" label (source of truth from tracker).
+	if !hasMeshLabel(issue.Labels) {
+		return false
+	}
+
 	// Must not be already running.
 	if _, ok := o.running[issue.ID]; ok {
 		return false
 	}
-
-	// Must not be already claimed.
-	if o.claimed[issue.ID] {
-		return false
-	}
-
-	// Note: completed set is bookkeeping only, not used for dispatch gating.
 
 	// Must not be in retry queue.
 	if _, ok := o.retryQueue[issue.ID]; ok {
@@ -93,6 +92,16 @@ func (o *Orchestrator) isEligible(issue model.Issue) bool {
 	}
 
 	return true
+}
+
+// hasMeshLabel checks if the issue has the "mesh" label (exactly "mesh", not "mesh-working" etc).
+func hasMeshLabel(labels []string) bool {
+	for _, l := range labels {
+		if strings.ToLower(l) == "mesh" {
+			return true
+		}
+	}
+	return false
 }
 
 // blockersCleared returns true if all blockers are in terminal states.

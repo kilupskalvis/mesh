@@ -27,8 +27,11 @@ def test_build_sdk_options_base_tools():
 
     assert "Read" in opts.allowed_tools
     assert "Bash" in opts.allowed_tools
-    assert opts.system_prompt == "You are a test agent."
+    assert opts.system_prompt["type"] == "preset"
+    assert opts.system_prompt["preset"] == "claude_code"
+    assert opts.system_prompt["append"] == "You are a test agent."
     assert opts.permission_mode == "bypassPermissions"
+    assert opts.thinking == {"type": "adaptive"}
 
 
 def test_build_sdk_options_jira_tools():

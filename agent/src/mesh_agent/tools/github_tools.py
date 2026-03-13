@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -78,7 +79,7 @@ async def github_comment(args: dict) -> dict:
 @tool(
     "github_create_pr",
     "Create a pull request for the current branch",
-    {"title": str, "body": str, "head": str},
+    {"title": str, "body": str, "head": str, "base": str},
 )
 async def github_create_pr(args: dict) -> dict:
     """Create a pull request via the proxy."""
@@ -93,6 +94,7 @@ async def github_create_pr(args: dict) -> dict:
                 "title": args.get("title", ""),
                 "body": args.get("body", ""),
                 "head": args.get("head", ""),
+                "base": args.get("base", "main"),
             },
             timeout=aiohttp.ClientTimeout(total=15),
         ) as resp:
@@ -107,6 +109,65 @@ async def github_create_pr(args: dict) -> dict:
         msg = f"PR #{number} created: {pr_url}"
     else:
         msg = f"Failed to create PR: HTTP {resp.status} — {str(data)[:200]}"
+
+    return {"content": [{"type": "text", "text": msg}]}
+
+
+@tool("github_get_labels", "Get current labels on the GitHub issue", {})
+async def github_get_labels(args: dict) -> dict:
+    """Get the current labels on the issue via the proxy."""
+    endpoint = os.environ["GITHUB_ENDPOINT"]
+    url = f"{endpoint}/labels"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url, headers=_headers(), timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            try:
+                data = await resp.json()
+            except Exception:
+                data = {"text": await resp.text()}
+
+    if resp.status == 200:
+        labels = data.get("labels", [])
+        label_str = ", ".join(labels) if labels else "none"
+        msg = f"Labels: {label_str}"
+    else:
+        msg = f"Failed to get labels: HTTP {resp.status} — {str(data)[:200]}"
+
+    return {"content": [{"type": "text", "text": msg}]}
+
+
+@tool(
+    "github_set_labels",
+    "Set mesh lifecycle labels on the GitHub issue",
+    {"labels": list},
+)
+async def github_set_labels(args: dict) -> dict:
+    """Set mesh-prefixed labels on the issue via the proxy."""
+    endpoint = os.environ["GITHUB_ENDPOINT"]
+    url = f"{endpoint}/labels"
+    labels = args.get("labels", [])
+    if isinstance(labels, str):
+        labels = json.loads(labels)
+
+    async with aiohttp.ClientSession() as session:
+        async with session.put(
+            url,
+            headers=_headers(),
+            json={"labels": labels},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            try:
+                data = await resp.json()
+            except Exception:
+                data = {"text": await resp.text()}
+
+    if resp.status == 200:
+        result_labels = data.get("labels") or labels
+        msg = f"Labels set: {', '.join(str(lbl) for lbl in result_labels)}"
+    else:
+        msg = f"Failed to set labels: HTTP {resp.status} — {str(data)[:200]}"
 
     return {"content": [{"type": "text", "text": msg}]}
 

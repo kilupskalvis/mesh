@@ -45,6 +45,9 @@ type ServiceConfig struct {
 	MaxConcurrentAgents  int
 	MaxTurns             int
 	MaxRetryBackoffMs    int
+	MaxErrorRetries      int
+	MaxContinuations     int
+	RetryBackoffBaseMs   int
 	MaxConcurrentByState map[string]int
 	TurnTimeoutMs        int
 	ReadTimeoutMs        int
@@ -191,7 +194,11 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 	// Workspace (supports $VAR and ~ expansion)
 	wsRoot := getNestedString(raw, "workspace", "root")
 	if wsRoot == "" {
-		wsRoot = os.TempDir() + "/mesh_workspaces"
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			home = os.TempDir()
+		}
+		wsRoot = home + "/.mesh/workspaces"
 	}
 	if resolved, ok := resolveEnvVar(wsRoot); ok {
 		wsRoot = resolved
@@ -237,6 +244,9 @@ func NewServiceConfig(raw map[string]any) (*ServiceConfig, error) {
 	cfg.MaxConcurrentAgents = getNestedInt(raw, 10, "agent", "max_concurrent_agents")
 	cfg.MaxTurns = getNestedInt(raw, 20, "agent", "max_turns")
 	cfg.MaxRetryBackoffMs = getNestedInt(raw, 300000, "agent", "max_retry_backoff_ms")
+	cfg.MaxErrorRetries = getNestedInt(raw, 3, "agent", "max_error_retries")
+	cfg.MaxContinuations = getNestedInt(raw, 5, "agent", "max_continuations")
+	cfg.RetryBackoffBaseMs = getNestedInt(raw, 10000, "agent", "retry_backoff_base_ms")
 	cfg.TurnTimeoutMs = getNestedInt(raw, 3600000, "agent", "turn_timeout_ms")
 	cfg.ReadTimeoutMs = getNestedInt(raw, 300000, "agent", "read_timeout_ms")
 	cfg.StallTimeoutMs = getNestedInt(raw, 300000, "agent", "stall_timeout_ms")

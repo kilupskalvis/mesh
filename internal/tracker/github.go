@@ -212,6 +212,137 @@ func (c *GitHubClient) doGet(reqURL string) ([]byte, error) {
 	return body, nil
 }
 
+// GetLabels returns the current labels on an issue.
+func (c *GitHubClient) GetLabels(issueID string) ([]string, error) {
+	reqURL := fmt.Sprintf("%s/repos/%s/%s/issues/%s/labels", c.baseURL, c.Owner, c.Repo, issueID)
+	body, err := c.doGet(reqURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var labels []ghLabel
+	if err := json.Unmarshal(body, &labels); err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubMalformedResponse,
+			"failed to parse labels response", err)
+	}
+
+	result := make([]string, len(labels))
+	for i, l := range labels {
+		result[i] = strings.ToLower(l.Name)
+	}
+	return result, nil
+}
+
+// SetLabels replaces all mesh-prefixed labels with the provided set, preserving other labels.
+func (c *GitHubClient) SetLabels(issueID string, labels []string) error {
+	// 1. Get current labels.
+	current, err := c.GetLabels(issueID)
+	if err != nil {
+		return err
+	}
+
+	// 2. Filter out mesh-prefixed labels, keep everything else.
+	var merged []string
+	for _, l := range current {
+		if !strings.HasPrefix(l, "mesh") {
+			merged = append(merged, l)
+		}
+	}
+
+	// 3. Append requested labels.
+	merged = append(merged, labels...)
+
+	// 4. PATCH issue with merged label set.
+	return c.patchLabels(issueID, merged)
+}
+
+// PostComment posts a comment on an issue.
+func (c *GitHubClient) PostComment(issueID string, body string) error {
+	reqURL := fmt.Sprintf("%s/repos/%s/%s/issues/%s/comments", c.baseURL, c.Owner, c.Repo, issueID)
+	payload := map[string]string{"body": body}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return model.NewMeshError(model.ErrGitHubAPIRequest, "failed to marshal comment", err)
+	}
+	_, err = c.doRequest("POST", reqURL, payloadBytes)
+	return err
+}
+
+// FetchIssuesByLabel fetches open issues with a specific label.
+func (c *GitHubClient) FetchIssuesByLabel(label string) ([]model.Issue, error) {
+	return c.fetchIssues("open", label)
+}
+
+// patchLabels sets the full label list on an issue via PATCH.
+func (c *GitHubClient) patchLabels(issueID string, labels []string) error {
+	reqURL := fmt.Sprintf("%s/repos/%s/%s/issues/%s", c.baseURL, c.Owner, c.Repo, issueID)
+	payload := map[string]any{"labels": labels}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return model.NewMeshError(model.ErrGitHubAPIRequest, "failed to marshal labels", err)
+	}
+	_, err = c.doRequest("PATCH", reqURL, payloadBytes)
+	return err
+}
+
+// doRequest performs an authenticated HTTP request with the given method and body.
+func (c *GitHubClient) doRequest(method, reqURL string, body []byte) ([]byte, error) {
+	token, err := c.tokenProvider()
+	if err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubAPIAuth, "failed to get token", err)
+	}
+
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = strings.NewReader(string(body))
+	}
+
+	req, err := http.NewRequest(method, reqURL, bodyReader)
+	if err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubAPIRequest, "failed to create request", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubAPIRequest, "request failed", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, model.NewMeshError(model.ErrGitHubAPIRequest, "failed to read response body", err)
+	}
+
+	switch {
+	case resp.StatusCode == 401:
+		return nil, model.NewMeshError(model.ErrGitHubAPIAuth, "authentication failed", nil)
+	case resp.StatusCode == 403:
+		remaining := resp.Header.Get("X-RateLimit-Remaining")
+		if remaining == "0" {
+			return nil, model.NewMeshError(model.ErrGitHubAPIRateLimit,
+				fmt.Sprintf("rate limited (reset: %s)", resp.Header.Get("X-RateLimit-Reset")), nil)
+		}
+		return nil, model.NewMeshError(model.ErrGitHubAPIPermission, "permission denied", nil)
+	case resp.StatusCode == 404:
+		return nil, model.NewMeshError(model.ErrGitHubAPINotFound,
+			fmt.Sprintf("not found: %s", reqURL), nil)
+	case resp.StatusCode == 429:
+		return nil, model.NewMeshError(model.ErrGitHubAPIRateLimit,
+			fmt.Sprintf("rate limited (Retry-After: %s)", resp.Header.Get("Retry-After")), nil)
+	case resp.StatusCode >= 400:
+		return nil, model.NewMeshError(model.ErrGitHubAPIRequest,
+			fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody)), nil)
+	}
+
+	return respBody, nil
+}
+
 func (c *GitHubClient) normalizeIssue(raw ghIssue) model.Issue {
 	number := strconv.Itoa(raw.Number)
 	identifier := fmt.Sprintf("%s/%s#%d", c.Owner, c.Repo, raw.Number)

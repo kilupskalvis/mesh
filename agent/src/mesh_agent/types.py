@@ -41,6 +41,7 @@ class StdinPayload:
     config: AgentConfig
     attempt: Optional[int] = None
     system_prompt: str = ""
+    is_continuation: bool = False
 
 
 @dataclass

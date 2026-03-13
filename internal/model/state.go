@@ -39,18 +39,23 @@ type RunningEntry struct {
 	RetryAttempt             int        `json:"retry_attempt"`
 	StartedAt                time.Time  `json:"started_at"`
 	TurnCount                int        `json:"turn_count"`
+	ErrorRetries             int        `json:"error_retries"`
+	ContinuationCount        int        `json:"continuation_count"`
 	CancelFunc               func()     `json:"-"`
 }
 
 // RetryEntry is a scheduled retry for an issue.
 type RetryEntry struct {
-	IssueID        string  `json:"issue_id"`
-	Identifier     string  `json:"identifier"`
-	Attempt        int     `json:"attempt"`
-	DueAtMs        int64   `json:"due_at_ms"`
-	Error          *string `json:"error"`
-	IsContinuation bool    `json:"is_continuation"`
-	CancelFunc     func()  `json:"-"`
+	IssueID           string  `json:"issue_id"`
+	Identifier        string  `json:"identifier"`
+	Attempt           int     `json:"attempt"`
+	DueAtMs           int64   `json:"due_at_ms"`
+	Error             *string `json:"error"`
+	IsContinuation    bool    `json:"is_continuation"`
+	ErrorRetries      int     `json:"error_retries"`
+	ContinuationCount int     `json:"continuation_count"`
+	Issue             Issue   `json:"issue"`
+	CancelFunc        func()  `json:"-"`
 }
 
 // AgentTotals tracks aggregate token usage and runtime across all sessions.
@@ -108,12 +113,13 @@ type LogEntry struct {
 
 // StdinPayload is the JSON object written to the agent container's stdin.
 type StdinPayload struct {
-	Issue        Issue              `json:"issue"`
-	Prompt       string             `json:"prompt"`
-	SystemPrompt string             `json:"system_prompt"`
-	Attempt      *int               `json:"attempt"`
-	Workspace    string             `json:"workspace"`
-	Config       StdinPayloadConfig `json:"config"`
+	Issue          Issue              `json:"issue"`
+	Prompt         string             `json:"prompt"`
+	SystemPrompt   string             `json:"system_prompt"`
+	Attempt        *int               `json:"attempt"`
+	Workspace      string             `json:"workspace"`
+	IsContinuation bool               `json:"is_continuation"`
+	Config         StdinPayloadConfig `json:"config"`
 }
 
 // StdinPayloadConfig carries agent config values to the container.

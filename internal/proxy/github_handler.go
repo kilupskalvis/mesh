@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -31,6 +32,7 @@ func NewGitHubHandler(apiBase string, tokenProvider TokenProvider) *GitHubHandle
 	h.mux.HandleFunc("/github/comment", h.handleComment)
 	h.mux.HandleFunc("/github/create-pr", h.handleCreatePR)
 	h.mux.HandleFunc("/github/push", h.handlePush)
+	h.mux.HandleFunc("/github/labels", h.handleLabels)
 	return h
 }
 
@@ -52,9 +54,11 @@ func issueContext(r *http.Request) (owner, repo, issue string, err error) {
 func (h *GitHubHandler) handleState(w http.ResponseWriter, r *http.Request) {
 	owner, repo, issue, err := issueContext(r)
 	if err != nil {
+		slog.Warn("proxy: handleState bad request", "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	slog.Info("proxy: handleState", "owner", owner, "repo", repo, "issue", issue)
 
 	url := fmt.Sprintf("%s/repos/%s/%s/issues/%s", h.apiBase, owner, repo, issue)
 	resp, err := h.doGitHub("GET", url, nil)
@@ -167,15 +171,19 @@ func (h *GitHubHandler) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	// Run git push on the host side with token-in-URL auth.
 	// This works with GitHub's HTTPS auth: https://x-access-token:<token>@github.com
+	owner := r.Header.Get("X-GitHub-Owner")
+	repo := r.Header.Get("X-GitHub-Repo")
 	remoteURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s/%s.git",
-		token,
-		r.Header.Get("X-GitHub-Owner"),
-		r.Header.Get("X-GitHub-Repo"),
+		token, owner, repo,
 	)
 	cmd := exec.Command("git", "push", remoteURL, body.Branch)
 	cmd.Dir = workspace
 
+	slog.Info("push handler: executing git push",
+		"workspace", workspace, "branch", body.Branch, "owner", owner, "repo", repo)
+
 	output, err := cmd.CombinedOutput()
+	slog.Info("push handler: git push result", "output", string(output), "err", err)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -192,6 +200,114 @@ func (h *GitHubHandler) handlePush(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"output": string(output),
 	})
+}
+
+// handleLabels handles GET (read labels) and PUT (set mesh-prefixed labels) for an issue.
+func (h *GitHubHandler) handleLabels(w http.ResponseWriter, r *http.Request) {
+	owner, repo, issue, err := issueContext(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		h.handleGetLabels(w, owner, repo, issue)
+	case "PUT":
+		h.handleSetLabels(w, r, owner, repo, issue)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *GitHubHandler) handleGetLabels(w http.ResponseWriter, owner, repo, issue string) {
+	url := fmt.Sprintf("%s/repos/%s/%s/issues/%s/labels", h.apiBase, owner, repo, issue)
+	resp, err := h.doGitHub("GET", url, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		http.Error(w, fmt.Sprintf("GitHub API: %d %s", resp.StatusCode, string(body)), http.StatusBadGateway)
+		return
+	}
+
+	var ghLabels []struct {
+		Name string `json:"name"`
+	}
+	json.Unmarshal(body, &ghLabels)
+
+	labels := make([]string, len(ghLabels))
+	for i, l := range ghLabels {
+		labels[i] = l.Name
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"labels": labels})
+}
+
+func (h *GitHubHandler) handleSetLabels(w http.ResponseWriter, r *http.Request, owner, repo, issue string) {
+	slog.Info("proxy: handleSetLabels", "owner", owner, "repo", repo, "issue", issue)
+	var reqBody struct {
+		Labels []string `json:"labels"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Get current labels.
+	getURL := fmt.Sprintf("%s/repos/%s/%s/issues/%s/labels", h.apiBase, owner, repo, issue)
+	resp, err := h.doGitHub("GET", getURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		http.Error(w, fmt.Sprintf("GitHub API: %d %s", resp.StatusCode, string(body)), http.StatusBadGateway)
+		return
+	}
+
+	var ghLabels []struct {
+		Name string `json:"name"`
+	}
+	json.Unmarshal(body, &ghLabels)
+
+	// 2. Filter out mesh-prefixed labels, keep others.
+	var merged []string
+	for _, l := range ghLabels {
+		if !strings.HasPrefix(strings.ToLower(l.Name), "mesh") {
+			merged = append(merged, l.Name)
+		}
+	}
+
+	// 3. Append requested labels.
+	merged = append(merged, reqBody.Labels...)
+
+	// 4. PATCH issue with merged label set.
+	patchURL := fmt.Sprintf("%s/repos/%s/%s/issues/%s", h.apiBase, owner, repo, issue)
+	payload, _ := json.Marshal(map[string]any{"labels": merged})
+	patchResp, err := h.doGitHub("PATCH", patchURL, strings.NewReader(string(payload)))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer patchResp.Body.Close()
+
+	patchBody, _ := io.ReadAll(patchResp.Body)
+	if patchResp.StatusCode != 200 {
+		http.Error(w, fmt.Sprintf("GitHub API: %d %s", patchResp.StatusCode, string(patchBody)), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"labels": merged})
 }
 
 // doGitHub makes an authenticated request to the GitHub API.

@@ -58,29 +58,28 @@ func TestSelectCandidates_FiltersDuplicates(t *testing.T) {
 		Identifier: "PROJ-2",
 		Issue:      makeIssue("2", "PROJ-2", "Running Issue", "In Progress"),
 	}
-	orch.claimed["3"] = true
-	orch.completed["4"] = true // bookkeeping only, should NOT gate dispatch
 	orch.retryQueue["5"] = &model.RetryEntry{IssueID: "5", Identifier: "PROJ-5"}
 
 	issues := []model.Issue{
-		makeIssue("1", "PROJ-1", "New Issue", "To Do"),
-		makeIssue("2", "PROJ-2", "Running Issue", "In Progress"),
-		makeIssue("3", "PROJ-3", "Claimed Issue", "To Do"),
-		makeIssue("4", "PROJ-4", "Completed Issue", "To Do"),
-		makeIssue("5", "PROJ-5", "Retry Issue", "To Do"),
-		makeIssue("6", "PROJ-6", "Another New", "To Do"),
+		{ID: "1", Identifier: "PROJ-1", Title: "New Issue", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Running Issue", State: "In Progress", Labels: []string{"mesh"}},
+		{ID: "3", Identifier: "PROJ-3", Title: "No Label Issue", State: "To Do"},
+		{ID: "4", Identifier: "PROJ-4", Title: "Completed Issue", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "5", Identifier: "PROJ-5", Title: "Retry Issue", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "6", Identifier: "PROJ-6", Title: "Another New", State: "To Do", Labels: []string{"mesh"}},
 	}
 
 	candidates := orch.SelectCandidates(issues)
 
-	// Issues 1, 4, and 6 should be eligible. Issue 4 is in completed but
-	// that's bookkeeping only per spec, not dispatch gating.
+	// Issues 1, 4, and 6 should be eligible:
+	// - Issue 2 is running, issue 3 has no mesh label, issue 5 is in retry queue.
 	assert.Len(t, candidates, 3)
 	ids := make([]string, len(candidates))
 	for i, c := range candidates {
 		ids[i] = c.ID
 	}
 	assert.Contains(t, ids, "1")
+	assert.Contains(t, ids, "4")
 	assert.Contains(t, ids, "6")
 }
 
@@ -103,10 +102,10 @@ func TestSelectCandidates_SortsByPriority(t *testing.T) {
 	t3 := time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)
 
 	issues := []model.Issue{
-		{ID: "3", Identifier: "PROJ-3", Title: "Low Priority", State: "To Do", Priority: &pri3, CreatedAt: &t1},
-		{ID: "1", Identifier: "PROJ-1", Title: "High Priority", State: "To Do", Priority: &pri1, CreatedAt: &t3},
-		{ID: "2", Identifier: "PROJ-2", Title: "Medium Priority", State: "To Do", Priority: &pri2, CreatedAt: &t2},
-		{ID: "4", Identifier: "PROJ-4", Title: "No Priority", State: "To Do", Priority: nil, CreatedAt: &t1},
+		{ID: "3", Identifier: "PROJ-3", Title: "Low Priority", State: "To Do", Priority: &pri3, CreatedAt: &t1, Labels: []string{"mesh"}},
+		{ID: "1", Identifier: "PROJ-1", Title: "High Priority", State: "To Do", Priority: &pri1, CreatedAt: &t3, Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Medium Priority", State: "To Do", Priority: &pri2, CreatedAt: &t2, Labels: []string{"mesh"}},
+		{ID: "4", Identifier: "PROJ-4", Title: "No Priority", State: "To Do", Priority: nil, CreatedAt: &t1, Labels: []string{"mesh"}},
 	}
 
 	candidates := orch.SelectCandidates(issues)
@@ -134,9 +133,9 @@ func TestSelectCandidates_SortsByCreatedAtThenIdentifier(t *testing.T) {
 	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
 
 	issues := []model.Issue{
-		{ID: "3", Identifier: "PROJ-C", Title: "Same Time B", State: "To Do", Priority: &pri, CreatedAt: &t1},
-		{ID: "2", Identifier: "PROJ-B", Title: "Later", State: "To Do", Priority: &pri, CreatedAt: &t2},
-		{ID: "1", Identifier: "PROJ-A", Title: "Same Time A", State: "To Do", Priority: &pri, CreatedAt: &t1},
+		{ID: "3", Identifier: "PROJ-C", Title: "Same Time B", State: "To Do", Priority: &pri, CreatedAt: &t1, Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-B", Title: "Later", State: "To Do", Priority: &pri, CreatedAt: &t2, Labels: []string{"mesh"}},
+		{ID: "1", Identifier: "PROJ-A", Title: "Same Time A", State: "To Do", Priority: &pri, CreatedAt: &t1, Labels: []string{"mesh"}},
 	}
 
 	candidates := orch.SelectCandidates(issues)
@@ -163,18 +162,21 @@ func TestSelectCandidates_FiltersBlockedIssues(t *testing.T) {
 	issues := []model.Issue{
 		{
 			ID: "1", Identifier: "PROJ-1", Title: "Unblocked", State: "To Do",
+			Labels: []string{"mesh"},
 			BlockedBy: []model.BlockerRef{
 				{ID: strPtr("10"), Identifier: strPtr("PROJ-10"), State: &doneState},
 			},
 		},
 		{
 			ID: "2", Identifier: "PROJ-2", Title: "Blocked", State: "To Do",
+			Labels: []string{"mesh"},
 			BlockedBy: []model.BlockerRef{
 				{ID: strPtr("11"), Identifier: strPtr("PROJ-11"), State: &inProgressState},
 			},
 		},
 		{
 			ID: "3", Identifier: "PROJ-3", Title: "No Blockers", State: "To Do",
+			Labels:    []string{"mesh"},
 			BlockedBy: []model.BlockerRef{},
 		},
 	}
@@ -202,9 +204,9 @@ func TestSelectCandidates_FiltersMissingRequiredFields(t *testing.T) {
 	orch := New(cfg, "test prompt", tracker, r, ws, testLogger())
 
 	issues := []model.Issue{
-		{ID: "1", Identifier: "PROJ-1", Title: "Valid", State: "To Do"},
-		{ID: "2", Identifier: "", Title: "Missing Identifier", State: "To Do"},
-		{ID: "", Identifier: "PROJ-3", Title: "Missing ID", State: "To Do"},
+		{ID: "1", Identifier: "PROJ-1", Title: "Valid", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "", Title: "Missing Identifier", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "", Identifier: "PROJ-3", Title: "Missing ID", State: "To Do", Labels: []string{"mesh"}},
 	}
 
 	candidates := orch.SelectCandidates(issues)
@@ -398,11 +400,13 @@ func TestDispatchIssue_ConfigOverrideReplacesDefault(t *testing.T) {
 func TestBackoffMs(t *testing.T) {
 	t.Parallel()
 
+	// BackoffMs adds 0-25% jitter on top of the capped value.
+	// We check that the result is within [base, base*1.25].
 	tests := []struct {
-		name     string
-		attempt  int
-		maxMs    int
-		expected int64
+		name    string
+		attempt int
+		maxMs   int
+		base    int64 // expected value before jitter
 	}{
 		{"attempt 1", 1, 300000, 10000},
 		{"attempt 2", 2, 300000, 20000},
@@ -416,8 +420,10 @@ func TestBackoffMs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result := BackoffMs(tt.attempt, tt.maxMs)
-			assert.Equal(t, tt.expected, result)
+			result := BackoffMs(tt.attempt, 10000, tt.maxMs)
+			assert.GreaterOrEqual(t, result, tt.base, "result should be >= base")
+			maxWithJitter := tt.base + tt.base/4 // +25%
+			assert.LessOrEqual(t, result, maxWithJitter, "result should be <= base+25%%")
 		})
 	}
 }
@@ -425,13 +431,15 @@ func TestBackoffMs(t *testing.T) {
 func TestBackoffMs_CapsAtMax(t *testing.T) {
 	t.Parallel()
 
-	// Very high attempt should be capped.
-	result := BackoffMs(20, 300000)
-	assert.Equal(t, int64(300000), result)
+	// Very high attempt should be capped at max + up to 25% jitter.
+	result := BackoffMs(20, 10000, 300000)
+	assert.GreaterOrEqual(t, result, int64(300000))
+	assert.LessOrEqual(t, result, int64(375000))
 
 	// Custom max.
-	result = BackoffMs(3, 30000)
-	assert.Equal(t, int64(30000), result)
+	result = BackoffMs(3, 10000, 30000)
+	assert.GreaterOrEqual(t, result, int64(30000))
+	assert.LessOrEqual(t, result, int64(37500))
 }
 
 func TestScheduleRetry_ContinuationUsesShortDelay(t *testing.T) {
@@ -442,7 +450,7 @@ func TestScheduleRetry_ContinuationUsesShortDelay(t *testing.T) {
 		workspace.NewManager(t.TempDir()), testLogger())
 
 	nowMs := time.Now().UnixMilli()
-	orch.ScheduleRetry("1", "PROJ-1", 1, true, "")
+	orch.ScheduleRetry("1", "PROJ-1", 1, true, "", 0, 0, model.Issue{})
 
 	entry, ok := orch.retryQueue["1"]
 	assert.True(t, ok)
@@ -459,12 +467,13 @@ func TestScheduleRetry_ErrorUsesExponentialBackoff(t *testing.T) {
 		workspace.NewManager(t.TempDir()), testLogger())
 
 	nowMs := time.Now().UnixMilli()
-	orch.ScheduleRetry("1", "PROJ-1", 2, false, "container crashed")
+	orch.ScheduleRetry("1", "PROJ-1", 2, false, "container crashed", 0, 0, model.Issue{})
 
 	entry, ok := orch.retryQueue["1"]
 	assert.True(t, ok)
-	// Attempt 2: 10000 * 2^(2-1) = 20000ms
-	assert.InDelta(t, nowMs+20000, entry.DueAtMs, 200)
+	// Attempt 2: base = 10000 * 2^(2-1) = 20000ms, jitter adds 0-25%.
+	assert.GreaterOrEqual(t, entry.DueAtMs, nowMs+20000)
+	assert.LessOrEqual(t, entry.DueAtMs, nowMs+25000)
 	assert.NotNil(t, entry.Error)
 	assert.Equal(t, "container crashed", *entry.Error)
 }
@@ -485,7 +494,7 @@ func TestScheduleRetry_CancelsExistingRetry(t *testing.T) {
 		CancelFunc: func() { cancelled = true },
 	}
 
-	orch.ScheduleRetry("1", "PROJ-1", 2, false, "new error")
+	orch.ScheduleRetry("1", "PROJ-1", 2, false, "new error", 0, 0, model.Issue{})
 
 	assert.True(t, cancelled, "existing retry should have been cancelled")
 	assert.Equal(t, 2, orch.retryQueue["1"].Attempt)
@@ -509,10 +518,8 @@ func TestHasSlot_GlobalLimit(t *testing.T) {
 	orch.running["2"] = &model.RunningEntry{Issue: makeIssue("2", "PROJ-2", "B", "To Do")}
 	assert.False(t, orch.hasSlot("To Do"))
 
-	// Replace one running with one claimed — only running counts per spec,
-	// so 1 running < max 2 means slot is available.
+	// Remove one running entry — 1 running < max 2 means slot is available.
 	delete(orch.running, "2")
-	orch.claimed["3"] = true
 	assert.True(t, orch.hasSlot("To Do"))
 }
 
@@ -548,7 +555,7 @@ func TestDispatchIssue_GitHubEnvVars(t *testing.T) {
 	r.mu.Unlock()
 
 	// GitHub-specific env vars.
-	assert.Equal(t, "kilupskalvis/mesh", env["GITHUB_REPO"])
+	assert.Equal(t, "mesh", env["GITHUB_REPO"])
 	assert.Equal(t, "kilupskalvis", env["GITHUB_OWNER"])
 	assert.Equal(t, "42", env["GITHUB_ISSUE_NUMBER"])
 	assert.Equal(t, "https://github.com/kilupskalvis/mesh/issues/42", env["GITHUB_ISSUE_URL"])
@@ -589,7 +596,6 @@ func TestDispatchIssue_ContinuationReusesWorktree(t *testing.T) {
 
 	// Simulate completion so the issue can be re-dispatched.
 	delete(orch.running, "1")
-	delete(orch.claimed, "1")
 
 	// Continuation dispatch (isContinuation=true) should reuse as-is.
 	attempt := 1
@@ -623,7 +629,6 @@ func TestDispatchIssue_ErrorRetryResetsWorktree(t *testing.T) {
 
 	// Simulate completion.
 	delete(orch.running, "1")
-	delete(orch.claimed, "1")
 
 	// Error retry (isContinuation=false) should reset the worktree.
 	attempt := 2
@@ -657,10 +662,9 @@ func TestProcessRetries_PassesContinuationFlag(t *testing.T) {
 
 	// Simulate completion.
 	delete(orch.running, "1")
-	delete(orch.claimed, "1")
 
 	// Schedule a continuation retry that is already due.
-	orch.ScheduleRetry("1", "PROJ-1", 1, true, "")
+	orch.ScheduleRetry("1", "PROJ-1", 1, true, "", 0, 0, issue)
 	orch.retryQueue["1"].DueAtMs = 0 // make it due now
 
 	orch.ProcessRetries(ctx)
@@ -702,10 +706,8 @@ func TestReconcileTerminal_RemovesWorktree(t *testing.T) {
 
 	// Running entry removed, marked completed.
 	assert.Empty(t, orch.running)
-	assert.True(t, orch.completed["1"])
+	assert.Greater(t, orch.completedCount, 0)
 
 	// Worktree directory should be cleaned up.
 	assert.False(t, ws.WorktreeExists(branch), "worktree should be removed for terminal issue")
 }
-
-func strPtr(s string) *string { return &s }

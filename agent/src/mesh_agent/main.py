@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import uuid
@@ -54,6 +55,13 @@ def parse_stdin() -> StdinPayload:
 
 def run() -> int:
     """Main agent execution loop. Returns exit code."""
+    # Configure logging to stderr so it appears in docker logs.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        stream=sys.stderr,
+    )
+
     # Initialize Sentry (no-op if SENTRY_DSN is empty/absent).
     dsn = os.environ.get("SENTRY_DSN", "")
     if dsn:

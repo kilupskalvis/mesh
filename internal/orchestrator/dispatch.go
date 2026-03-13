@@ -15,20 +15,65 @@ import (
 	"github.com/kalvis/mesh/internal/workspace"
 )
 
-// DispatchIssue starts an agent for a single issue. It claims the issue,
-// prepares the workspace via git worktree, renders the prompt, launches the
-// container, and starts a monitoring goroutine.
+// continuationPrompt is appended to the system prompt for continuation runs.
+const continuationPrompt = `
+
+## Continuation
+
+This is a continuation of previous work on this issue. A prior agent session
+already made progress. Before starting fresh:
+
+1. Run ` + "`git log --oneline -20`" + ` to see what was already committed.
+2. Run ` + "`git diff`" + ` and ` + "`git status`" + ` to see uncommitted work.
+3. Check the issue comments for context from the previous session.
+4. Pick up where the previous session left off — do not redo completed work.
+
+If the previous work looks complete (PR already created, tests passing),
+set the label to ` + "`mesh-review`" + ` and stop.`
+
+// DispatchIssue starts an agent for a single issue. It verifies the mesh label,
+// swaps it to mesh-working, prepares the workspace, renders the prompt, launches
+// the container, and starts a monitoring goroutine.
 //
 // isContinuation indicates whether this is a continuation retry (reuse workspace
 // as-is) vs an error retry (reset worktree to origin/main).
 func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, attempt *int, isContinuation bool) error {
-	// 1. Mark as claimed.
-	o.claimed[issue.ID] = true
+	// 1. Label swap: mesh → mesh-working.
+	if err := o.tracker.SetLabels(issue.ID, []string{"mesh-working"}); err != nil {
+		return fmt.Errorf("label swap to mesh-working: %w", err)
+	}
 
-	// 2. Generate branch name.
+	// 2. Prepare workspace and launch container.
+	err := o.launchContainer(ctx, issue, attempt, isContinuation, 0, 0)
+	if err != nil {
+		// Rollback label on failure.
+		if rbErr := o.tracker.SetLabels(issue.ID, []string{"mesh"}); rbErr != nil {
+			o.logger.Error("failed to rollback label to mesh",
+				"issue", issue.Identifier, "error", rbErr)
+		}
+		return err
+	}
+	return nil
+}
+
+// DispatchRetry starts an agent for a retry. The label is already mesh-working
+// so no label swap is needed. Counters are carried from the RetryEntry.
+func (o *Orchestrator) DispatchRetry(ctx context.Context, retry *model.RetryEntry) error {
+	issue := retry.Issue
+	var attempt *int
+	if retry.Attempt > 0 {
+		a := retry.Attempt
+		attempt = &a
+	}
+	return o.launchContainer(ctx, issue, attempt, retry.IsContinuation, retry.ErrorRetries, retry.ContinuationCount)
+}
+
+// launchContainer is the shared implementation for DispatchIssue and DispatchRetry.
+func (o *Orchestrator) launchContainer(ctx context.Context, issue model.Issue, attempt *int, isContinuation bool, errorRetries, continuationCount int) error {
+	// 1. Generate branch name.
 	branchName := workspace.BranchName(issue.ID, issue.Title)
 
-	// 3. Prepare workspace via worktree.
+	// 2. Prepare workspace via worktree.
 	var wsPath string
 	var created bool
 
@@ -40,7 +85,6 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 				_ = o.workspace.Fetch(token)
 			}
 			if err := o.workspace.ResetWorktree(branchName); err != nil {
-				delete(o.claimed, issue.ID)
 				return err
 			}
 		}
@@ -53,7 +97,6 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		var err error
 		wsPath, err = o.workspace.CreateWorktree(branchName)
 		if err != nil {
-			delete(o.claimed, issue.ID)
 			return err
 		}
 		created = true
@@ -65,42 +108,43 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 	// Run after_create hook if workspace was just created.
 	if created && o.config.AfterCreateHook != "" {
 		if err := workspace.RunHook("after_create", o.config.AfterCreateHook, wsPath, o.config.HookTimeoutMs); err != nil {
-			delete(o.claimed, issue.ID)
 			return err
 		}
 	}
 
-	// 4. Run before_run hook.
+	// 3. Run before_run hook.
 	if o.config.BeforeRunHook != "" {
 		if err := workspace.RunHook("before_run", o.config.BeforeRunHook, wsPath, o.config.HookTimeoutMs); err != nil {
-			delete(o.claimed, issue.ID)
 			return err
 		}
 	}
 
-	// 5. Render prompt template.
+	// 4. Render prompt template.
 	prompt, err := template.Render(o.promptTmpl, issue, attempt)
 	if err != nil {
 		o.runAfterRunHook(wsPath) // best-effort
-		delete(o.claimed, issue.ID)
 		return err
 	}
 
-	// 6. Build full system prompt.
+	// 5. Build full system prompt.
 	containerWorkDir := runner.ContainerWorkspacesRoot + "/" + branchName
 	basePrompt := o.config.AgentSystemPrompt
 	if basePrompt == "" {
 		basePrompt = prompts.DefaultSystemPrompt
 	}
 	systemPrompt := buildSystemPrompt(basePrompt, issue, containerWorkDir, branchName)
+	if isContinuation {
+		systemPrompt += continuationPrompt
+	}
 
-	// 7. Build stdin payload.
+	// 6. Build stdin payload.
 	payload := model.StdinPayload{
-		Issue:        issue,
-		Prompt:       prompt,
-		SystemPrompt: systemPrompt,
-		Attempt:      attempt,
-		Workspace:    containerWorkDir,
+		Issue:          issue,
+		Prompt:         prompt,
+		SystemPrompt:   systemPrompt,
+		Attempt:        attempt,
+		Workspace:      containerWorkDir,
+		IsContinuation: isContinuation,
 		Config: model.StdinPayloadConfig{
 			TurnTimeoutMs:  o.config.TurnTimeoutMs,
 			MaxTurns:       o.config.MaxTurns,
@@ -112,7 +156,7 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		},
 	}
 
-	// 8. Build run params — secrets stay on host, only URLs go into container.
+	// 7. Build run params — secrets stay on host, only URLs go into container.
 	envVars := make(map[string]string)
 	for k, v := range o.config.DockerExtraEnv {
 		envVars[k] = v
@@ -130,7 +174,7 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		envVars["JIRA_ISSUE_ID"] = issue.ID
 		envVars["JIRA_ISSUE_KEY"] = issue.Identifier
 	case "github":
-		envVars["GITHUB_REPO"] = o.config.TrackerOwner + "/" + o.config.TrackerRepo
+		envVars["GITHUB_REPO"] = o.config.TrackerRepo
 		envVars["GITHUB_OWNER"] = o.config.TrackerOwner
 		envVars["GITHUB_ISSUE_NUMBER"] = issue.ID
 		if issue.URL != nil {
@@ -158,30 +202,30 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 		ReadTimeoutMs:    o.config.ReadTimeoutMs,
 	}
 
-	// 9. Start container.
+	// 8. Start container.
 	runCtx, cancel := context.WithCancel(ctx)
 	eventCh, resultCh, err := o.runner.Run(runCtx, params)
 	if err != nil {
 		cancel()
 		o.runAfterRunHook(wsPath) // best-effort
-		delete(o.claimed, issue.ID)
 		return err
 	}
 
-	// 10. Move from claimed to running.
+	// 9. Add to running map with cumulative counters.
 	containerID := runner.ContainerName(sessionID)
 	now := time.Now()
 	entry := &model.RunningEntry{
-		Identifier:    issue.Identifier,
-		Issue:         issue,
-		SessionID:     sessionID,
-		ContainerID:   containerID,
-		WorkspacePath: wsPath,
-		BranchName:    branchName,
-		StartedAt:     now,
-		CancelFunc:    cancel,
+		Identifier:        issue.Identifier,
+		Issue:             issue,
+		SessionID:         sessionID,
+		ContainerID:       containerID,
+		WorkspacePath:     wsPath,
+		BranchName:        branchName,
+		StartedAt:         now,
+		ErrorRetries:      errorRetries,
+		ContinuationCount: continuationCount,
+		CancelFunc:        cancel,
 	}
-	delete(o.claimed, issue.ID)
 	o.running[issue.ID] = entry
 
 	issueLogger := logging.WithIssueContext(o.logger, issue.ID, issue.Identifier)
@@ -189,7 +233,7 @@ func (o *Orchestrator) DispatchIssue(ctx context.Context, issue model.Issue, att
 	sessionLogger.Info("dispatched issue")
 	o.addLog("info", issue.Identifier, fmt.Sprintf("Dispatched (attempt %d)", attemptVal))
 
-	// 11. Start monitoring goroutine.
+	// 10. Start monitoring goroutine.
 	go o.monitorWorker(issue.ID, issue.Identifier, attemptVal, eventCh, resultCh, entry.StartedAt, sessionLogger)
 
 	return nil
@@ -260,19 +304,15 @@ func (o *Orchestrator) monitorWorker(
 
 	duration := time.Since(startedAt)
 
-	// Determine if this was a normal exit (continuation) or error.
-	isContinuation := result.Error == nil && result.ExitCode == 0
-
 	o.completionCh <- completionMsg{
-		IssueID:        issueID,
-		Identifier:     identifier,
-		Result:         result,
-		Attempt:        attempt,
-		IsContinuation: isContinuation,
-		InputTokens:    inputTokens,
-		OutputTokens:   outputTokens,
-		TotalTokens:    totalTokens,
-		Duration:       duration,
+		IssueID:      issueID,
+		Identifier:   identifier,
+		Result:       result,
+		Attempt:      attempt,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  totalTokens,
+		Duration:     duration,
 	}
 }
 

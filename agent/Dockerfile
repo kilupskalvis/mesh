@@ -11,6 +11,8 @@ COPY pyproject.toml uv.lock ./
 COPY src/ src/
 RUN uv sync --frozen --no-dev
 
-RUN useradd -m -s /bin/bash -u 1000 agent
+RUN useradd -m -s /bin/bash -u 1000 agent && chown -R 1000:1000 /app
+# Allow git to operate on mounted workspaces regardless of ownership.
+RUN git config --system --add safe.directory '*'
 ENV PYTHONUNBUFFERED=1 HOME=/home/agent
-ENTRYPOINT ["uv", "run", "--frozen", "python", "-m", "mesh_agent"]
+ENTRYPOINT ["uv", "run", "--frozen", "--project", "/app", "python", "-m", "mesh_agent"]

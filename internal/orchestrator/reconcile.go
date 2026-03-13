@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kalvis/mesh/internal/logging"
@@ -12,22 +13,33 @@ import (
 )
 
 // Reconcile checks running agents against current tracker state.
-// It performs two passes:
+// It performs multiple passes:
 //   - Part A: Stall detection (kill workers that haven't produced events recently)
+//   - Part A2: Turn timeout enforcement
 //   - Part B: Tracker state refresh (stop workers whose issues are terminal or out of scope)
+//   - Part C: Orphan detection (mesh-working issues with no running container or retry)
+//   - Part D: External label change detection
 func (o *Orchestrator) Reconcile(ctx context.Context) error {
-	if len(o.running) == 0 {
-		return nil
-	}
-
 	// Part A: Stall detection.
 	o.detectStalls()
 
 	// Part A2: Turn timeout enforcement.
 	o.detectTurnTimeouts()
 
-	// Part B: Tracker state refresh.
-	return o.reconcileTrackerState(ctx)
+	// Part B: Tracker state refresh (only if containers running).
+	if len(o.running) > 0 {
+		if err := o.reconcileTrackerState(ctx); err != nil {
+			o.logger.Error("tracker state reconciliation failed", "error", err)
+		}
+	}
+
+	// Part C: Orphan detection.
+	o.detectOrphans()
+
+	// Part D: External label change detection.
+	o.detectExternalLabelChanges()
+
+	return nil
 }
 
 // detectStalls checks each running entry for stall conditions.
@@ -74,16 +86,41 @@ func (o *Orchestrator) detectStalls() {
 			_ = o.runner.Stop(entry.ContainerID)
 		}
 
-		// Remove from running and schedule retry.
-		attempt := entry.RetryAttempt + 1
+		// Read counters from RunningEntry, increment error retries.
+		errorRetries := entry.ErrorRetries + 1
+		continuationCount := entry.ContinuationCount
+		issueSnapshot := entry.Issue
+
 		delete(o.running, issueID)
-		o.ScheduleRetry(issueID, entry.Identifier, attempt, false, "stall detected")
+
+		if errorRetries >= o.config.MaxErrorRetries {
+			// Max retries — set mesh-failed.
+			if err := o.tracker.SetLabels(issueID, []string{"mesh-failed"}); err != nil {
+				issueLogger.Error("failed to set mesh-failed after stall max retries", "error", err)
+			}
+			comment := fmt.Sprintf("Mesh agent gave up after %d error retries (last: stall detected)", errorRetries)
+			_ = o.tracker.PostComment(issueID, comment)
+			o.recordCompletion(model.CompletedEntry{
+				Identifier:  entry.Identifier,
+				Title:       issueSnapshot.Title,
+				Status:      "error",
+				Error:       "stall detected, max retries exceeded",
+				TotalTokens: entry.AgentTotalTokens,
+				Duration:    time.Since(entry.StartedAt),
+				CompletedAt: time.Now(),
+			})
+			o.addLog("error", entry.Identifier, "Max retries exceeded after stall")
+			continue
+		}
+
+		attempt := entry.RetryAttempt + 1
+		o.ScheduleRetry(issueID, entry.Identifier, attempt, false, "stall detected",
+			errorRetries, continuationCount, issueSnapshot)
 	}
 }
 
 // detectTurnTimeouts checks if any running container has exceeded the total
-// wall-clock turn timeout. This is distinct from stall detection: stall means
-// no events, turn timeout means total elapsed time since launch.
+// wall-clock turn timeout.
 func (o *Orchestrator) detectTurnTimeouts() {
 	if o.config.TurnTimeoutMs <= 0 {
 		return
@@ -117,9 +154,35 @@ func (o *Orchestrator) detectTurnTimeouts() {
 			_ = o.runner.Stop(entry.ContainerID)
 		}
 
-		attempt := entry.RetryAttempt + 1
+		// Read counters, increment error retries.
+		errorRetries := entry.ErrorRetries + 1
+		continuationCount := entry.ContinuationCount
+		issueSnapshot := entry.Issue
+
 		delete(o.running, issueID)
-		o.ScheduleRetry(issueID, entry.Identifier, attempt, false, "turn timeout exceeded")
+
+		if errorRetries >= o.config.MaxErrorRetries {
+			if err := o.tracker.SetLabels(issueID, []string{"mesh-failed"}); err != nil {
+				issueLogger.Error("failed to set mesh-failed after timeout max retries", "error", err)
+			}
+			comment := fmt.Sprintf("Mesh agent gave up after %d error retries (last: turn timeout exceeded)", errorRetries)
+			_ = o.tracker.PostComment(issueID, comment)
+			o.recordCompletion(model.CompletedEntry{
+				Identifier:  entry.Identifier,
+				Title:       issueSnapshot.Title,
+				Status:      "error",
+				Error:       "turn timeout exceeded, max retries exceeded",
+				TotalTokens: entry.AgentTotalTokens,
+				Duration:    time.Since(entry.StartedAt),
+				CompletedAt: time.Now(),
+			})
+			o.addLog("error", entry.Identifier, "Max retries exceeded after turn timeout")
+			continue
+		}
+
+		attempt := entry.RetryAttempt + 1
+		o.ScheduleRetry(issueID, entry.Identifier, attempt, false, "turn timeout exceeded",
+			errorRetries, continuationCount, issueSnapshot)
 	}
 }
 
@@ -233,7 +296,6 @@ func (o *Orchestrator) reconcileTrackerState(ctx context.Context) error {
 					issueLogger.Error("failed to remove worktree", "error", err)
 				}
 			}
-			o.completed[item.issueID] = true
 			o.recordCompletion(model.CompletedEntry{
 				Identifier:  entry.Identifier,
 				Title:       entry.Issue.Title,
@@ -246,9 +308,111 @@ func (o *Orchestrator) reconcileTrackerState(ctx context.Context) error {
 		}
 
 		delete(o.running, item.issueID)
-		// Remove from claimed if present.
-		delete(o.claimed, item.issueID)
 	}
 
 	return nil
+}
+
+// detectOrphans finds mesh-working issues with no running container or pending retry
+// and rolls them back to mesh.
+func (o *Orchestrator) detectOrphans() {
+	o.logger.Info("detectOrphans: fetching mesh-working issues")
+	issues, err := o.tracker.FetchIssuesByLabel("mesh-working")
+	o.logger.Info("detectOrphans: fetch done", "count", len(issues), "err", err)
+	if err != nil {
+		o.logger.Warn("orphan detection: failed to fetch mesh-working issues", "error", err)
+		return
+	}
+
+	for _, issue := range issues {
+		if _, running := o.running[issue.ID]; running {
+			continue
+		}
+		if _, inRetry := o.retryQueue[issue.ID]; inRetry {
+			continue
+		}
+		// Orphan — roll back to mesh.
+		if err := o.tracker.SetLabels(issue.ID, []string{"mesh"}); err != nil {
+			o.logger.Warn("orphan detection: failed to roll back label",
+				"issue", issue.Identifier, "error", err)
+			continue
+		}
+		o.logger.Info("orphan detection: rolled back to mesh", "issue", issue.Identifier)
+		o.addLog("warn", issue.Identifier, "Orphan detected: rolled back to mesh")
+	}
+}
+
+// detectExternalLabelChanges checks if labels on running issues were changed externally.
+func (o *Orchestrator) detectExternalLabelChanges() {
+	if len(o.running) == 0 {
+		return
+	}
+
+	var toStop []string
+
+	for issueID, entry := range o.running {
+		labels, err := o.tracker.GetLabels(issueID)
+		if err != nil {
+			// Can't read labels — skip this check, don't kill the container.
+			continue
+		}
+
+		meshLabel := findMeshLabel(labels)
+
+		switch meshLabel {
+		case "mesh-working":
+			// Expected — container is running.
+			continue
+		case "mesh-review":
+			// Agent may be finishing up — leave it running.
+			continue
+		case "mesh-failed":
+			// External system marked as failed — stop container.
+			o.logger.Info("external label change: mesh-failed, stopping", "issue", entry.Identifier)
+			toStop = append(toStop, issueID)
+		case "mesh":
+			// Shouldn't happen while running — log warning, stop.
+			o.logger.Warn("external label change: rolled back to mesh while running", "issue", entry.Identifier)
+			toStop = append(toStop, issueID)
+		case "":
+			if !hasMeshPrefix(labels) {
+				// Human removed all mesh labels — stop container.
+				o.logger.Info("external label change: all mesh labels removed, stopping", "issue", entry.Identifier)
+				toStop = append(toStop, issueID)
+			}
+		}
+	}
+
+	for _, issueID := range toStop {
+		entry, ok := o.running[issueID]
+		if !ok {
+			continue
+		}
+
+		if entry.CancelFunc != nil {
+			entry.CancelFunc()
+		}
+		if entry.ContainerID != "" {
+			_ = o.runner.Stop(entry.ContainerID)
+		}
+
+		delete(o.running, issueID)
+
+		labels, _ := o.tracker.GetLabels(issueID)
+		meshLabel := findMeshLabel(labels)
+		status := "cancelled"
+		if meshLabel == "mesh-failed" {
+			status = "error"
+		}
+
+		o.recordCompletion(model.CompletedEntry{
+			Identifier:  entry.Identifier,
+			Title:       entry.Issue.Title,
+			Status:      status,
+			TotalTokens: entry.AgentTotalTokens,
+			Duration:    time.Since(entry.StartedAt),
+			CompletedAt: time.Now(),
+		})
+		o.addLog("warn", entry.Identifier, fmt.Sprintf("Stopped by external label change (%s)", strings.Join(labels, ", ")))
+	}
 }

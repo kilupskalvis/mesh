@@ -28,6 +28,13 @@ type mockTracker struct {
 	fetchCount       int
 	statesByIDIssues []model.Issue
 	statesByIDErr    error
+	labels           map[string][]string // issueID -> labels
+	labelsErr        error
+	setLabelsErr     error
+	commentErr       error
+	byLabelIssues    []model.Issue
+	byLabelErr       error
+	comments         []struct{ IssueID, Body string }
 }
 
 func (m *mockTracker) FetchCandidateIssues(states []string) ([]model.Issue, error) {
@@ -61,6 +68,44 @@ func (m *mockTracker) FetchIssueStatesByIDs(issueIDs []string) ([]model.Issue, e
 		}
 	}
 	return result, m.err
+}
+
+func (m *mockTracker) GetLabels(issueID string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.labelsErr != nil {
+		return nil, m.labelsErr
+	}
+	if m.labels != nil {
+		return m.labels[issueID], nil
+	}
+	return nil, nil
+}
+
+func (m *mockTracker) SetLabels(issueID string, labels []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.setLabelsErr != nil {
+		return m.setLabelsErr
+	}
+	if m.labels == nil {
+		m.labels = make(map[string][]string)
+	}
+	m.labels[issueID] = labels
+	return nil
+}
+
+func (m *mockTracker) PostComment(issueID string, body string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.comments = append(m.comments, struct{ IssueID, Body string }{issueID, body})
+	return m.commentErr
+}
+
+func (m *mockTracker) FetchIssuesByLabel(label string) ([]model.Issue, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.byLabelIssues, m.byLabelErr
 }
 
 type mockRunner struct {
@@ -139,6 +184,9 @@ func testConfig() *config.ServiceConfig {
 		MaxConcurrentAgents:  5,
 		MaxTurns:             20,
 		MaxRetryBackoffMs:    300000,
+		MaxErrorRetries:      3,
+		MaxContinuations:     5,
+		RetryBackoffBaseMs:   10000,
 		TurnTimeoutMs:        3600000,
 		ReadTimeoutMs:        5000,
 		StallTimeoutMs:       300000,
@@ -220,8 +268,8 @@ func TestOrchestratorDispatchesOnTick(t *testing.T) {
 	t.Parallel()
 
 	issues := []model.Issue{
-		makeIssue("1", "PROJ-1", "Fix login", "To Do"),
-		makeIssue("2", "PROJ-2", "Add tests", "In Progress"),
+		{ID: "1", Identifier: "PROJ-1", Title: "Fix login", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Add tests", State: "In Progress", Labels: []string{"mesh"}},
 	}
 
 	tracker := &mockTracker{issues: issues}
@@ -253,9 +301,9 @@ func TestOrchestratorRespectsMaxConcurrency(t *testing.T) {
 
 	// Create more issues than the max concurrency allows.
 	issues := []model.Issue{
-		makeIssue("1", "PROJ-1", "Issue 1", "To Do"),
-		makeIssue("2", "PROJ-2", "Issue 2", "To Do"),
-		makeIssue("3", "PROJ-3", "Issue 3", "To Do"),
+		{ID: "1", Identifier: "PROJ-1", Title: "Issue 1", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Issue 2", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "3", Identifier: "PROJ-3", Title: "Issue 3", State: "To Do", Labels: []string{"mesh"}},
 	}
 
 	tracker := &mockTracker{issues: issues}
@@ -280,11 +328,13 @@ func TestOrchestratorRespectsMaxConcurrency(t *testing.T) {
 	assert.Len(t, orch.running, 2, "should have 2 running entries")
 }
 
-func TestCompletedSetIsBookkeepingOnly(t *testing.T) {
+func TestLabelBasedGating_IssueWithoutMeshLabelNotEligible(t *testing.T) {
 	t.Parallel()
 
+	// Issue without "mesh" label should not be eligible for dispatch.
 	issues := []model.Issue{
-		makeIssue("1", "PROJ-1", "Issue 1", "To Do"),
+		{ID: "1", Identifier: "PROJ-1", Title: "No Mesh Label", State: "To Do", Labels: []string{"bug"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Has Mesh Label", State: "To Do", Labels: []string{"mesh"}},
 	}
 
 	tracker := &mockTracker{issues: issues}
@@ -294,24 +344,11 @@ func TestCompletedSetIsBookkeepingOnly(t *testing.T) {
 
 	orch := New(cfg, "test prompt", tracker, r, ws, testLogger())
 
-	// Mark issue as completed — this is bookkeeping only
-	// and should NOT prevent re-dispatch.
-	orch.completed["1"] = true
+	candidates := orch.SelectCandidates(issues)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- orch.Start(ctx)
-	}()
-
-	time.Sleep(300 * time.Millisecond)
-	cancel()
-	<-errCh
-
-	// Issue should still be dispatched despite being in completed set.
-	assert.Equal(t, 1, r.getRunCount())
+	// Only issue 2 (with "mesh" label) should be eligible.
+	assert.Len(t, candidates, 1)
+	assert.Equal(t, "2", candidates[0].ID)
 }
 
 func TestOrchestratorHandlesTrackerError(t *testing.T) {
@@ -382,9 +419,9 @@ func TestOrchestratorRespectsPerStateConcurrency(t *testing.T) {
 	t.Parallel()
 
 	issues := []model.Issue{
-		makeIssue("1", "PROJ-1", "Issue 1", "To Do"),
-		makeIssue("2", "PROJ-2", "Issue 2", "To Do"),
-		makeIssue("3", "PROJ-3", "Issue 3", "To Do"),
+		{ID: "1", Identifier: "PROJ-1", Title: "Issue 1", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "2", Identifier: "PROJ-2", Title: "Issue 2", State: "To Do", Labels: []string{"mesh"}},
+		{ID: "3", Identifier: "PROJ-3", Title: "Issue 3", State: "To Do", Labels: []string{"mesh"}},
 	}
 
 	tracker := &mockTracker{issues: issues}
@@ -431,7 +468,7 @@ func TestOrchestratorSnapshot(t *testing.T) {
 		SessionID:  "sess-1",
 		StartedAt:  now,
 	}
-	orch.completed["2"] = true
+	orch.completedCount = 1
 	errMsg := "some error"
 	orch.retryQueue["3"] = &model.RetryEntry{
 		IssueID:    "3",
@@ -491,8 +528,8 @@ func TestReconcileTerminalIssue(t *testing.T) {
 
 	// Should have been removed from running.
 	assert.Empty(t, orch.running)
-	// Should be marked as completed.
-	assert.True(t, orch.completed["1"])
+	// Should have incremented the completed count.
+	assert.Greater(t, orch.completedCount, 0)
 }
 
 func TestReconcileActiveIssueUpdatesSnapshot(t *testing.T) {
@@ -501,6 +538,7 @@ func TestReconcileActiveIssueUpdatesSnapshot(t *testing.T) {
 	freshIssue := makeIssue("1", "PROJ-1", "Updated Title", "In Progress")
 	tracker := &mockTracker{
 		statesByIDIssues: []model.Issue{freshIssue},
+		labels:           map[string][]string{"1": {"mesh-working"}},
 	}
 	r := newMockRunner()
 	ws := workspace.NewManager(t.TempDir())
@@ -592,6 +630,7 @@ func TestTurnTimeoutSkippedWhenDisabled(t *testing.T) {
 		statesByIDIssues: []model.Issue{
 			makeIssue("1", "PROJ-1", "Issue 1", "To Do"),
 		},
+		labels: map[string][]string{"1": {"mesh-working"}},
 	}
 	r := newMockRunner()
 	ws := workspace.NewManager(t.TempDir())
@@ -796,7 +835,10 @@ func TestHandleCompletion_UpdatesAgentTotals(t *testing.T) {
 	t.Parallel()
 
 	cfg := testConfig()
-	orch := New(cfg, "test", &mockTracker{}, newMockRunner(),
+	tracker := &mockTracker{
+		labels: map[string][]string{"1": {"mesh-working"}},
+	}
+	orch := New(cfg, "test", tracker, newMockRunner(),
 		workspace.NewManager(t.TempDir()), testLogger())
 
 	orch.running["1"] = &model.RunningEntry{
@@ -838,7 +880,10 @@ func TestHandleCompletion_RunsAfterRunHook(t *testing.T) {
 	cfg.AfterRunHook = fmt.Sprintf("touch %s", markerFile)
 	cfg.HookTimeoutMs = 5000
 
-	orch := New(cfg, "test", &mockTracker{}, newMockRunner(),
+	tracker := &mockTracker{
+		labels: map[string][]string{"1": {"mesh-working"}},
+	}
+	orch := New(cfg, "test", tracker, newMockRunner(),
 		workspace.NewManager(t.TempDir()), testLogger())
 
 	wsDir := t.TempDir()
@@ -914,6 +959,7 @@ func TestStallDetectionSkippedWhenDisabled(t *testing.T) {
 		statesByIDIssues: []model.Issue{
 			makeIssue("1", "PROJ-1", "Issue 1", "To Do"),
 		},
+		labels: map[string][]string{"1": {"mesh-working"}},
 	}
 	r := newMockRunner()
 	ws := workspace.NewManager(t.TempDir())

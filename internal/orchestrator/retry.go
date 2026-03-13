@@ -2,36 +2,48 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/kalvis/mesh/internal/logging"
 	"github.com/kalvis/mesh/internal/model"
 )
 
-// BackoffMs calculates the exponential backoff delay in milliseconds.
-// Formula: min(10000 * 2^(attempt-1), maxBackoffMs)
-// For attempt <= 0, returns 10000 (the base delay).
-func BackoffMs(attempt int, maxBackoffMs int) int64 {
+// BackoffMs calculates the exponential backoff delay in milliseconds with jitter.
+// Formula: capped = min(baseMs * 2^(attempt-1), maxBackoffMs)
+//
+//	jitter = random uniform [0, capped * 0.25]
+//	delay  = capped + jitter
+func BackoffMs(attempt int, baseMs int, maxBackoffMs int) int64 {
 	if attempt <= 0 {
 		attempt = 1
 	}
-	base := int64(10000)
+	if baseMs <= 0 {
+		baseMs = 10000
+	}
 	exponent := attempt - 1
 	if exponent > 30 {
 		exponent = 30 // prevent overflow
 	}
-	delay := base * int64(math.Pow(2, float64(exponent)))
-	if delay < 0 {
-		delay = int64(maxBackoffMs)
+	raw := int64(baseMs) * int64(math.Pow(2, float64(exponent)))
+	if raw < 0 {
+		raw = int64(maxBackoffMs)
 	}
-	return min(delay, int64(maxBackoffMs))
+	capped := min(raw, int64(maxBackoffMs))
+
+	// Add 0-25% jitter on top of the capped delay.
+	jitter := int64(float64(capped) * 0.25 * rand.Float64())
+	return capped + jitter
 }
 
 // ScheduleRetry schedules a retry for a failed or completed issue.
 // Continuation retries (turn limit reached, normal exit) use a 1s delay.
-// Error retries use exponential backoff: min(10000 * 2^(attempt-1), max_retry_backoff_ms).
-func (o *Orchestrator) ScheduleRetry(issueID, identifier string, attempt int, isContinuation bool, errMsg string) {
+// Error retries use exponential backoff with jitter.
+// Counters (errorRetries, continuationCount) and the Issue snapshot are carried through.
+func (o *Orchestrator) ScheduleRetry(issueID, identifier string, attempt int, isContinuation bool, errMsg string, errorRetries, continuationCount int, issue model.Issue) {
 	// Cancel any existing retry for this issue.
 	if existing, ok := o.retryQueue[issueID]; ok {
 		if existing.CancelFunc != nil {
@@ -44,7 +56,7 @@ func (o *Orchestrator) ScheduleRetry(issueID, identifier string, attempt int, is
 	if isContinuation {
 		delayMs = 1000
 	} else {
-		delayMs = BackoffMs(attempt, o.config.MaxRetryBackoffMs)
+		delayMs = BackoffMs(attempt, o.config.RetryBackoffBaseMs, o.config.MaxRetryBackoffMs)
 	}
 
 	dueAtMs := time.Now().UnixMilli() + delayMs
@@ -55,12 +67,15 @@ func (o *Orchestrator) ScheduleRetry(issueID, identifier string, attempt int, is
 	}
 
 	entry := &model.RetryEntry{
-		IssueID:        issueID,
-		Identifier:     identifier,
-		Attempt:        attempt,
-		DueAtMs:        dueAtMs,
-		Error:          errPtr,
-		IsContinuation: isContinuation,
+		IssueID:           issueID,
+		Identifier:        identifier,
+		Attempt:           attempt,
+		DueAtMs:           dueAtMs,
+		Error:             errPtr,
+		IsContinuation:    isContinuation,
+		ErrorRetries:      errorRetries,
+		ContinuationCount: continuationCount,
+		Issue:             issue,
 	}
 
 	o.retryQueue[issueID] = entry
@@ -70,10 +85,13 @@ func (o *Orchestrator) ScheduleRetry(issueID, identifier string, attempt int, is
 		"attempt", attempt,
 		"delay_ms", delayMs,
 		"continuation", isContinuation,
+		"error_retries", errorRetries,
+		"continuation_count", continuationCount,
 	)
 }
 
 // ProcessRetries checks the retry queue and dispatches retries that are due.
+// For each due retry, it checks the current label via GetLabels before dispatching.
 func (o *Orchestrator) ProcessRetries(ctx context.Context) {
 	nowMs := time.Now().UnixMilli()
 
@@ -89,57 +107,85 @@ func (o *Orchestrator) ProcessRetries(ctx context.Context) {
 		return
 	}
 
-	// Fetch active candidate issues to check eligibility.
-	issues, err := o.tracker.FetchCandidateIssues(o.config.ActiveStates)
-	if err != nil {
-		o.logger.Error("failed to fetch candidates for retry processing", "error", err)
-		// Requeue all due retries with incremented attempt.
-		for _, retry := range dueRetries {
-			nextAttempt := retry.Attempt + 1
-			errMsg := "retry poll failed"
-			o.ScheduleRetry(retry.IssueID, retry.Identifier, nextAttempt, false, errMsg)
-		}
-		return
-	}
-
-	// Build lookup by ID.
-	issueMap := make(map[string]model.Issue, len(issues))
-	for _, issue := range issues {
-		issueMap[issue.ID] = issue
-	}
-
 	for _, retry := range dueRetries {
 		retryLogger := logging.WithIssueContext(o.logger, retry.IssueID, retry.Identifier)
 
-		issue, found := issueMap[retry.IssueID]
-		if !found {
-			// Issue no longer active — release claim.
-			retryLogger.Info("retry: issue no longer active, releasing claim")
+		// Check current labels via API.
+		labels, err := o.tracker.GetLabels(retry.IssueID)
+		if err != nil {
+			// GetLabels failed — requeue with short delay.
+			retryLogger.Error("retry: failed to check labels, requeuing", "error", err)
+			retry.DueAtMs = time.Now().UnixMilli() + 5000
+			retry.Error = strPtr(fmt.Sprintf("GetLabels failed: %v", err))
+			continue
+		}
+
+		meshLabel := findMeshLabel(labels)
+
+		switch meshLabel {
+		case "mesh-working":
+			// Expected state — proceed with dispatch.
+
+		case "mesh-review", "mesh-failed":
+			// Resolved externally — remove from queue.
+			retryLogger.Info("retry: issue resolved externally", "label", meshLabel)
+			delete(o.retryQueue, retry.IssueID)
+			continue
+
+		case "mesh", "":
+			// Human intervened or labels removed — remove from queue.
+			retryLogger.Info("retry: labels changed externally, removing from queue", "label", meshLabel)
+			delete(o.retryQueue, retry.IssueID)
+			continue
+
+		default:
+			retryLogger.Warn("retry: unexpected mesh label", "label", meshLabel)
 			delete(o.retryQueue, retry.IssueID)
 			continue
 		}
 
 		// Check if we have a slot.
-		if !o.hasSlot(issue.State) {
-			// No slot — requeue with error.
+		if !o.hasSlot(retry.Issue.State) {
 			retryLogger.Info("retry: no available slots, requeuing")
-			errMsg := "no available orchestrator slots"
-			retry.Error = &errMsg
-			retry.DueAtMs = time.Now().UnixMilli() + 5000 // retry in 5s
+			retry.DueAtMs = time.Now().UnixMilli() + 5000
+			retry.Error = strPtr("no available orchestrator slots")
 			continue
 		}
 
 		// Remove from retry queue before dispatching.
 		delete(o.retryQueue, retry.IssueID)
 
-		// Dispatch.
-		retryAttempt := retry.Attempt
-		if err := o.DispatchIssue(ctx, issue, &retryAttempt, retry.IsContinuation); err != nil {
+		// Dispatch via retry path (skips label swap — already mesh-working).
+		if err := o.DispatchRetry(ctx, retry); err != nil {
 			retryLogger.Error("retry dispatch failed", "error", err)
-			// Re-schedule with incremented attempt.
+			// Re-schedule with incremented attempt and counters.
 			nextAttempt := retry.Attempt + 1
-			errStr := err.Error()
-			o.ScheduleRetry(retry.IssueID, retry.Identifier, nextAttempt, false, errStr)
+			errRetries := retry.ErrorRetries + 1
+			if errRetries >= o.config.MaxErrorRetries {
+				// Max retries — set mesh-failed.
+				if err := o.tracker.SetLabels(retry.IssueID, []string{"mesh-failed"}); err != nil {
+					retryLogger.Error("failed to set mesh-failed after max retries", "error", err)
+				}
+				comment := fmt.Sprintf("Mesh agent gave up after %d error retries. Last error: %v",
+					errRetries, err)
+				_ = o.tracker.PostComment(retry.IssueID, comment)
+				o.addLog("error", retry.Identifier, "Max retries exceeded during dispatch")
+				continue
+			}
+			o.ScheduleRetry(retry.IssueID, retry.Identifier, nextAttempt, false, err.Error(),
+				errRetries, retry.ContinuationCount, retry.Issue)
 		}
 	}
 }
+
+// hasMeshPrefix returns true if any label starts with "mesh".
+func hasMeshPrefix(labels []string) bool {
+	for _, l := range labels {
+		if strings.HasPrefix(strings.ToLower(l), "mesh") {
+			return true
+		}
+	}
+	return false
+}
+
+func strPtr(s string) *string { return &s }

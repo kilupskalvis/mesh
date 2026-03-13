@@ -14,11 +14,15 @@ import (
 	"github.com/kalvis/mesh/internal/workspace"
 )
 
-// TrackerClient is the interface the orchestrator uses for issue fetching.
+// TrackerClient is the interface the orchestrator uses for issue fetching and label management.
 type TrackerClient interface {
 	FetchCandidateIssues(activeStates []string) ([]model.Issue, error)
 	FetchIssuesByStates(stateNames []string) ([]model.Issue, error)
 	FetchIssueStatesByIDs(issueIDs []string) ([]model.Issue, error)
+	GetLabels(issueID string) ([]string, error)
+	SetLabels(issueID string, labels []string) error
+	PostComment(issueID string, body string) error
+	FetchIssuesByLabel(label string) ([]model.Issue, error)
 }
 
 // ErrorReporter is an interface for reporting errors to an external service (e.g. Sentry).
@@ -52,9 +56,8 @@ type Orchestrator struct {
 
 	// State
 	running          map[string]*model.RunningEntry // issue_id -> running entry
-	claimed          map[string]bool                // issue_id -> true
 	retryQueue       map[string]*model.RetryEntry   // issue_id -> retry entry
-	completed        map[string]bool                // issue_id -> true (bookkeeping only)
+	completedCount   int                            // monotonically increasing counter
 	completedHistory []model.CompletedEntry         // most recent first, capped
 	activityLog      []model.LogEntry               // most recent last, capped
 	agentTotals      model.AgentTotals
@@ -97,9 +100,7 @@ func New(cfg *config.ServiceConfig, promptTmpl string, tracker TrackerClient,
 		promptTmpl:     promptTmpl,
 		logger:         logger,
 		running:        make(map[string]*model.RunningEntry),
-		claimed:        make(map[string]bool),
 		retryQueue:     make(map[string]*model.RetryEntry),
-		completed:      make(map[string]bool),
 		stopCh:         make(chan struct{}),
 		refreshCh:      make(chan struct{}, 1),
 		snapshotReqCh:  make(chan chan StateSnapshot),
@@ -230,7 +231,7 @@ func (o *Orchestrator) buildSnapshot() StateSnapshot {
 	snap := StateSnapshot{
 		Running:          make([]model.RunningEntry, 0, len(o.running)),
 		RetryQueue:       make([]model.RetryEntry, 0, len(o.retryQueue)),
-		Completed:        len(o.completed),
+		Completed:        o.completedCount,
 		CompletedHistory: make([]model.CompletedEntry, len(o.completedHistory)),
 		ActivityLog:      make([]model.LogEntry, len(o.activityLog)),
 		AgentTotals:      o.agentTotals,
@@ -253,6 +254,7 @@ func (o *Orchestrator) buildSnapshot() StateSnapshot {
 
 // recordCompletion adds a CompletedEntry to the history (most recent first).
 func (o *Orchestrator) recordCompletion(entry model.CompletedEntry) {
+	o.completedCount++
 	o.completedHistory = append([]model.CompletedEntry{entry}, o.completedHistory...)
 	if len(o.completedHistory) > maxCompletedHistory {
 		o.completedHistory = o.completedHistory[:maxCompletedHistory]
@@ -274,10 +276,14 @@ func (o *Orchestrator) addLog(level, identifier, message string) {
 
 // tick executes one full poll cycle: reconcile, fetch, filter, sort, dispatch.
 func (o *Orchestrator) tick(ctx context.Context) {
+	o.logger.Info("tick started", "running", len(o.running), "retries", len(o.retryQueue))
+
 	// 1. Reconcile running issues against tracker state.
+	o.logger.Info("tick: reconcile start")
 	if err := o.Reconcile(ctx); err != nil {
 		o.logger.Error("reconciliation failed", "error", err)
 	}
+	o.logger.Info("tick: reconcile done")
 
 	// 2. Process retries that are due.
 	o.ProcessRetries(ctx)
@@ -300,6 +306,7 @@ func (o *Orchestrator) tick(ctx context.Context) {
 
 	// 5. Filter and sort.
 	candidates := o.SelectCandidates(issues)
+	o.logger.Info("tick candidates", "fetched", len(issues), "eligible", len(candidates))
 
 	// 6. Dispatch eligible candidates.
 	for _, issue := range candidates {
@@ -379,6 +386,37 @@ func (o *Orchestrator) CleanupTerminalWorkspaces() {
 	}
 	if cleaned > 0 {
 		o.logger.Info("startup terminal cleanup complete", "cleaned", cleaned)
+	}
+}
+
+// CleanupOrphanedLabels finds issues labeled mesh-working that have no running
+// container or pending retry, and rolls them back to mesh. Called at startup to
+// recover from prior crashes.
+func (o *Orchestrator) CleanupOrphanedLabels() {
+	issues, err := o.tracker.FetchIssuesByLabel("mesh-working")
+	if err != nil {
+		o.logger.Warn("orphan label cleanup: failed to fetch mesh-working issues", "error", err)
+		return
+	}
+	cleaned := 0
+	for _, issue := range issues {
+		if _, running := o.running[issue.ID]; running {
+			continue
+		}
+		if _, inRetry := o.retryQueue[issue.ID]; inRetry {
+			continue
+		}
+		// Orphan: roll back to mesh.
+		if err := o.tracker.SetLabels(issue.ID, []string{"mesh"}); err != nil {
+			o.logger.Warn("orphan label cleanup: failed to roll back label",
+				"issue", issue.Identifier, "error", err)
+			continue
+		}
+		o.logger.Info("orphan label cleanup: rolled back to mesh", "issue", issue.Identifier)
+		cleaned++
+	}
+	if cleaned > 0 {
+		o.logger.Info("orphan label cleanup complete", "cleaned", cleaned)
 	}
 }
 

@@ -149,13 +149,20 @@ func (m *Manager) CreateWorktree(branch string) (string, error) {
 
 	base := m.basePath()
 
-	// Delete stale local branch if it exists from a prior run.
+	// Prune stale worktree entries, then delete the branch if it lingers.
+	_, _ = m.runGit(base, "worktree", "prune")
 	_, _ = m.runGit(base, "branch", "-D", branch)
 
 	// Create the worktree.
 	_, err := m.runGit(base, "worktree", "add", path, "-b", branch, "origin/main")
 	if err != nil {
 		return "", fmt.Errorf("create worktree %q: %w", branch, err)
+	}
+
+	// Rewrite the .git file to use a relative gitdir path so the worktree
+	// works inside Docker containers where the mount point differs from the host.
+	if err := relativizeGitdir(path); err != nil {
+		return "", fmt.Errorf("relativize gitdir: %w", err)
 	}
 
 	// Ensure container user can write (Colima maps as root:root).
@@ -195,6 +202,8 @@ func (m *Manager) recreateWorktree(branch string) error {
 	_, _ = m.runGit(base, "worktree", "remove", "--force", path)
 	// Fallback: rm -rf if worktree remove also failed.
 	_ = os.RemoveAll(path)
+	// Prune stale worktree entries so branch -D succeeds.
+	_, _ = m.runGit(base, "worktree", "prune")
 	// Delete branch.
 	_, _ = m.runGit(base, "branch", "-D", branch)
 
@@ -204,8 +213,59 @@ func (m *Manager) recreateWorktree(branch string) error {
 		return fmt.Errorf("recreate worktree %q: %w", branch, err)
 	}
 
+	if err := relativizeGitdir(path); err != nil {
+		return fmt.Errorf("relativize gitdir: %w", err)
+	}
+
 	if err := os.Chmod(path, 0o777); err != nil {
 		return fmt.Errorf("chmod worktree: %w", err)
+	}
+
+	return nil
+}
+
+// relativizeGitdir rewrites the `.git` file in a worktree directory and the
+// reverse `gitdir` pointer in the bare repo so both use relative paths.
+// This is necessary because `git worktree add` writes absolute host paths,
+// which break when the worktree is mounted at a different path inside Docker.
+func relativizeGitdir(worktreePath string) error {
+	dotGit := filepath.Join(worktreePath, ".git")
+
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return fmt.Errorf("read .git file: %w", err)
+	}
+
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir: "
+	if !strings.HasPrefix(line, prefix) {
+		return fmt.Errorf("unexpected .git content: %s", line)
+	}
+	absGitdir := strings.TrimPrefix(line, prefix)
+
+	// Compute relative path from worktree to its gitdir metadata.
+	relGitdir, err := filepath.Rel(worktreePath, absGitdir)
+	if err != nil {
+		return fmt.Errorf("compute relative gitdir: %w", err)
+	}
+	if err := os.WriteFile(dotGit, []byte("gitdir: "+relGitdir+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write .git file: %w", err)
+	}
+
+	// Fix the reverse pointer: .base/worktrees/<branch>/gitdir → worktree path.
+	reverseFile := filepath.Join(absGitdir, "gitdir")
+	revData, err := os.ReadFile(reverseFile)
+	if err != nil {
+		// Not fatal — some git versions may not create this file.
+		return nil
+	}
+	absWorktree := strings.TrimSpace(string(revData))
+	relWorktree, err := filepath.Rel(absGitdir, absWorktree)
+	if err != nil {
+		return fmt.Errorf("compute relative worktree path: %w", err)
+	}
+	if err := os.WriteFile(reverseFile, []byte(relWorktree+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write reverse gitdir: %w", err)
 	}
 
 	return nil
@@ -222,6 +282,8 @@ func (m *Manager) RemoveWorktree(branch string) error {
 		_ = os.RemoveAll(path)
 	}
 
+	// Prune stale metadata so branch -D succeeds after manual removal.
+	_, _ = m.runGit(base, "worktree", "prune")
 	// Delete local branch.
 	_, _ = m.runGit(base, "branch", "-D", branch)
 
